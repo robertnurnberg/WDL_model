@@ -20,12 +20,12 @@ endif
 
 SRC_FILE = scoreWDLstat.cpp
 EXE_FILE = scoreWDLstat
-HEADERS = external/chess.hpp external/json.hpp external/threadpool.hpp scoreWDLstat.hpp
+HEADERS = external/chess.hpp external/izstream.hpp external/izstream_impl.hpp external/json.hpp external/threadpool.hpp external/zstream_common.hpp scoreWDLstat.hpp
 
 all: $(EXE_FILE)
 
 $(EXE_FILE): $(SRC_FILE) $(HEADERS)
-	$(CXX) $(CXXFLAGS) $(NATIVE) -o $(EXE_FILE) $(SRC_FILE)
+	$(CXX) $(CXXFLAGS) $(NATIVE) -o $(EXE_FILE) $(SRC_FILE) -lz
 
 format:
 	clang-format -i $(SRC_FILE)

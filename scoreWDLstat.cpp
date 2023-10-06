@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "external/chess.hpp"
+#include "external/izstream.hpp"
 #include "external/json.hpp"
 #include "external/threadpool.hpp"
 
@@ -164,7 +165,6 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
     map.reserve(map_size);
 
     for (const auto &file : files) {
-        std::ifstream pgn_file(file);
         std::string move_counter;
 
         if (fix_fens) {
@@ -196,8 +196,16 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
             }
         }
 
+        std::unique_ptr<std::istream> pgn_file;
+        if (file.size() >= 3 && file.substr(file.size() - 3) == ".gz") {
+          std::ifstream is(file);
+            pgn_file = std::make_unique<zstream::igzstream>(is);
+        } else {
+            pgn_file = std::make_unique<std::ifstream>(file);
+        }
+
         while (true) {
-            auto game = pgn::readGame(pgn_file);
+            auto game = pgn::readGame(*pgn_file);
 
             if (!game.has_value()) {
                 break;
@@ -205,8 +213,6 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
 
             ana_game(map, game, regex_engine, move_counter);
         }
-
-        pgn_file.close();
     }
 }
 
