@@ -210,9 +210,7 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
             ana_game(map, game, regex_engine, move_counter);
         }
 
-        if (!gzfile) {
-            pgn_file.close();
-        }
+        pgn_file.close();
     }
 }
 
