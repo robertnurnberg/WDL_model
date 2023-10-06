@@ -366,9 +366,9 @@ void print_usage(char const *program_name) {
     // clang-format off
     ss << "Usage: " << program_name << " [options]" << "\n";
     ss << "Options:" << "\n";
-    ss << "  --file <path>         Path to pgn file" << "\n";
-    ss << "  --dir <path>          Path to directory containing pgns (default: pgns)" << "\n";
-    ss << "  -r                    Search for pgns recursively in subdirectories" << "\n";
+    ss << "  --file <path>         Path to .pgn(.gz) file" << "\n";
+    ss << "  --dir <path>          Path to directory containing .pgn(.gz) files (default: pgns)" << "\n";
+    ss << "  -r                    Search for .pgn(.gz) files recursively in subdirectories" << "\n";
     ss << "  --allowDuplicates     Allow duplicate directories for test pgns" << "\n";
     ss << "  --matchEngine <regex> Filter data based on engine name" << "\n";
     ss << "  --matchBook <regex>   Filter data based on book name" << "\n";
@@ -413,6 +413,16 @@ int main(int argc, char const *argv[]) {
                   << path << std::endl;
 
         files_pgn = get_files(path, recursive);
+    }
+
+    // sort to easily check for "duplicate" files, i.e. "foo.pgn.gz" and "foo.pgn"
+    std::sort(files_pgn.begin(), files_pgn.end());
+
+    for (size_t i = 1; i < files_pgn.size(); ++i) {
+        if (files_pgn[i].find(files_pgn[i - 1]) == 0) {
+            std::cout << "Error: \"Duplicate\" files: " << files_pgn[i - 1] << " and " << files_pgn[i] << std::endl;
+            std::exit(1);
+        }
     }
 
     bool allow_duplicates = find_argument(args, pos, "--allowDuplicates", true);
