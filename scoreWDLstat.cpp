@@ -1,5 +1,7 @@
 #include "scoreWDLstat.hpp"
 
+#include <zlib.h>
+
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -15,7 +17,6 @@
 #include <vector>
 
 #include "external/chess.hpp"
-#include "external/izstream.hpp"
 #include "external/json.hpp"
 #include "external/threadpool.hpp"
 
@@ -160,6 +161,19 @@ void ana_game(map_t &pos_map, const std::optional<Game> &game, const std::string
     }
 }
 
+void gzip_uncompress(std::vector<char> &out, const std::string &compressed_file_path) {
+    char outbuffer[1024 * 16];
+    gzFile infile = (gzFile)gzopen(compressed_file_path.c_str(), "rb");
+    gzrewind(infile);
+
+    while (!gzeof(infile)) {
+        int len = gzread(infile, outbuffer, sizeof(outbuffer));
+        out.insert(out.end(), outbuffer, outbuffer + len);
+    }
+
+    gzclose(infile);
+}
+
 void ana_files(map_t &map, const std::vector<std::string> &files, const std::string &regex_engine,
                const map_meta &meta_map, bool fix_fens) {
     map.reserve(map_size);
@@ -196,21 +210,29 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
             }
         }
 
-        std::ifstream pgn_file(file);
-        zstream::igzstream pgngz_file(pgn_file);
-        bool gzfile = (file.size() >= 3 && file.substr(file.size() - 3) == ".gz");
+        const auto pgn_iterator = [&](std::istream &iss) {
+            while (true) {
+                auto game = pgn::readGame(iss);
 
-        while (true) {
-            auto game = gzfile ? pgn::readGame(pgngz_file) : pgn::readGame(pgn_file);
+                if (!game.has_value()) {
+                    break;
+                }
 
-            if (!game.has_value()) {
-                break;
+                ana_game(map, game, regex_engine, move_counter);
             }
+        };
 
-            ana_game(map, game, regex_engine, move_counter);
+        if (file.size() >= 3 && file.substr(file.size() - 3) == ".gz") {
+            std::vector<char> chars;
+            gzip_uncompress(chars, file);
+
+            std::istringstream iss(std::string(chars.begin(), chars.end()));
+            pgn_iterator(iss);
+        } else {
+            std::ifstream pgn_stream(file);
+            pgn_iterator(pgn_stream);
+            pgn_stream.close();
         }
-
-        pgn_file.close();
     }
 }
 
