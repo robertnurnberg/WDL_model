@@ -300,8 +300,8 @@ void process(const std::vector<std::string> &files_pgn, map_t &pos_map,
 
     auto files_chunked = split_chunks(files_pgn, target_chunks);
 
-    std::cout << "Found " << files_pgn.size() << " pgn files, creating " << files_chunked.size()
-              << " chunks for processing." << std::endl;
+    std::cout << "Found " << files_pgn.size() << " .pgn(.gz) files, creating "
+              << files_chunked.size() << " chunks for processing." << std::endl;
 
     // Mutex for pos_map access
     std::mutex map_mutex;
@@ -422,7 +422,8 @@ int main(int argc, char const *argv[]) {
 
     for (size_t i = 1; i < files_pgn.size(); ++i) {
         if (files_pgn[i].find(files_pgn[i - 1]) == 0) {
-            std::cout << "Error: \"Duplicate\" files: " << files_pgn[i - 1] << " and " << files_pgn[i] << std::endl;
+            std::cout << "Error: \"Duplicate\" files: " << files_pgn[i - 1] << " and "
+                      << files_pgn[i] << std::endl;
             std::exit(1);
         }
     }

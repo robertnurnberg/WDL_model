@@ -131,7 +131,7 @@ for test, dateStr in ids:
         m = p.search(line)
         if m:
             filename = m.group(1) + ".pgn"
-            if os.path.exists(path + filename):
+            if os.path.exists(path + filename) or os.path.exists(path + filename + ".gz"):
                 countErrors = 0
                 continue
         else:
