@@ -196,16 +196,12 @@ void ana_files(map_t &map, const std::vector<std::string> &files, const std::str
             }
         }
 
-        std::unique_ptr<std::istream> pgn_file;
-        if (file.size() >= 3 && file.substr(file.size() - 3) == ".gz") {
-          std::ifstream is(file);
-            pgn_file = std::make_unique<zstream::igzstream>(is);
-        } else {
-            pgn_file = std::make_unique<std::ifstream>(file);
-        }
+        std::ifstream pgn_file(file);
+        zstream::igzstream pgngz_file(pgn_file);
+        bool gzfile = (file.size() >= 3 && file.substr(file.size() - 3) == ".gz");
 
         while (true) {
-            auto game = pgn::readGame(*pgn_file);
+            auto game = gzfile ? pgn::readGame(pgngz_file) : pgn::readGame(pgn_file);
 
             if (!game.has_value()) {
                 break;
