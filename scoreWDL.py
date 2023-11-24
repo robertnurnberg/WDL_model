@@ -56,6 +56,106 @@ def model_wdl_rates(
     return w, 1 - w - l, l
 
 
+class WdlData:
+    """stores the raw wdl data in three 2D numpy arrays"""
+
+    def __init__(self, args, eval_max):
+        self.NormalizeData = args.NormalizeData
+        if self.NormalizeData is not None:
+            self.NormalizeData = json.loads(self.NormalizeData)
+            self.NormalizeData["as"] = [float(x) for x in self.NormalizeData["as"]]
+        self.normalize_to_pawn_value = (
+            args.NormalizeToPawnValue
+            if self.NormalizeData is None
+            else int(sum(self.NormalizeData["as"]))
+        )
+        print(
+            "Converting evals with "
+            + (
+                f"NormalizeToPawnValue = {self.normalize_to_pawn_value}."
+                if self.NormalizeData is None
+                else f"NormalizeData = {self.NormalizeData}."
+            )
+        )
+
+        self.dim_mom = args.yDataMax - args.yDataMin + 1
+        self.offset_mom = args.yDataMin
+        self.eval_max = round(eval_max * self.normalize_to_pawn_value / 100)
+        self.dim_eval = 2 * self.eval_max + 1
+        self.offset_eval = -self.eval_max
+
+        # set up three arrays, each counting positions with a given internal eval and mom (move/material)
+        self._wins = np.zeros(
+            (self.dim_eval, self.dim_mom), dtype=int
+        )  # TODO: check if fortran order is faster
+        self._draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+        self._losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+
+    def index(self, eval, mom):
+        return eval - self.offset_eval, mom - self.offset_mom
+
+    def load_wdl_data(self, args):
+        """load the WDL data from json: the keys describe the position (result, move, material, eval),
+        and the values are the observed count of these positions"""
+        for filename in args.filename:
+            print(f"Reading eval stats from {filename}.")
+            with open(filename) as infile:
+                data = json.load(infile)
+                if not data:
+                    data = {}
+
+                for key, value in data.items():
+                    result, move, material, eval = literal_eval(key)
+
+                    if move < args.moveMin or move > args.moveMax:
+                        continue
+
+                    mom = move if args.yData == "move" else material
+
+                    # convert the cp eval to the internal value by undoing the normalization
+                    if self.NormalizeData is None:
+                        # undo static rescaling, that was constant in mom
+                        a_internal = self.normalize_to_pawn_value
+                    else:
+                        # undo dynamic rescaling, that was dependent on mom
+                        mom_clamped = min(
+                            max(mom, self.NormalizeData["yDataMin"]),
+                            self.NormalizeData["yDataMax"],
+                        )
+                        a_internal = poly3(
+                            mom_clamped / self.NormalizeData["yDataTarget"],
+                            *self.NormalizeData["as"],
+                        )
+                    eval_internal = round(eval * a_internal / 100)
+
+                    if abs(eval_internal) > self.eval_max:
+                        continue
+
+                    if result == "W":
+                        self._wins[self.index(eval_internal, mom)] += value
+                    elif result == "D":
+                        self._draws[self.index(eval_internal, mom)] += value
+                    elif result == "L":
+                        self._losses[self.index(eval_internal, mom)] += value
+
+        W, D, L = self._wins.sum(), self._draws.sum(), self._losses.sum()
+        print(f"Retained (W,D,L) = ({W}, {D}, {L} positions.")
+
+        if W + D + L == 0:
+            print("No data was found!")
+            exit(0)
+
+        # define wdl densities: if total = 0, entries will be -1.0
+        total = self._wins + self._draws + self._losses
+        self.mask = total > 0
+        self._w_density = -1.0 * np.ones_like(total)
+        self._d_density = -1.0 * np.ones_like(total)
+        self._l_density = -1.0 * np.ones_like(total)
+        self._w_density[self.mask] = self._wins[self.mask] / total[self.mask]
+        self._d_density[self.mask] = self._draws[self.mask] / total[self.mask]
+        self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
+
+
 @dataclass
 class ModelDataDensity:
     """Count data converted to densities"""
@@ -627,6 +727,162 @@ class WdlModel:
             coeffs_a, coeffs_b, model_ms, model_as, model_bs, label_as, label_bs
         )
 
+    def extract_model_data_numpy(
+        self,
+        wdl_data: WdlData,
+    ):
+        model_ms, model_as, model_bs = [], [], []
+
+        for mom in (
+            range(self.yDataMin, self.yDataMax + 1)
+            if self.modelFitting != "None"
+            else [self.yDataTarget]
+        ):
+            xdata, ywindata, ydrawdata, ylossdata = [], [], [], []
+            for i, momkey in enumerate(model_data_density.ys):
+                if not momkey == mom:
+                    continue
+                xdata.append(model_data_density.xs[i])
+                ywindata.append(model_data_density.zwins[i])
+                ydrawdata.append(model_data_density.zdraws[i])
+                ylossdata.append(model_data_density.zlosses[i])
+
+            # this shows the observed wdl data for mom=yDataTarget
+            if mom == self.yDataTarget and self.plot.setting != "no":
+                self.plot.create_sample_data_y(
+                    np.asarray(xdata), mom, ywindata, ydrawdata, ylossdata
+                )
+                if self.modelFitting == "None":
+                    break
+
+            if len(ywindata) < 10:
+                print(
+                    f"Warning: Too little data for {self.yData} value {mom}, skip fitting."
+                )
+                continue
+
+            # get initial values for a(mom) and b(mom) based on a simple fit of the curve
+            popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
+            popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
+
+            # refine the local result based on data, optimizing an objective function
+
+            if self.modelFitting != "fitDensity":
+                # get the subset of data relevant for this mom
+                winsubset: Counter[tuple[int, int]] = Counter()
+                drawsubset: Counter[tuple[int, int]] = Counter()
+                losssubset: Counter[tuple[int, int]] = Counter()
+                for (eval, momkey), count in win.items():
+                    if not momkey == mom:
+                        continue
+                    winsubset[eval, momkey] = count
+                for (eval, momkey), count in draw.items():
+                    if not momkey == mom:
+                        continue
+                    drawsubset[eval, momkey] = count
+                for (eval, momkey), count in loss.items():
+                    if not momkey == mom:
+                        continue
+                    losssubset[eval, momkey] = count
+
+                # minimize the objective function
+                objective_function = ObjectiveFunction(
+                    self.modelFitting,
+                    winsubset,
+                    drawsubset,
+                    losssubset,
+                    self.yDataTarget,
+                )
+                popt_ab, _ = objective_function.minimize(popt_ab)
+
+            # store result
+            model_ms.append(mom)
+            model_as.append(popt_ab[0])  # append a(mom)
+            model_bs.append(popt_ab[1])  # append b(mom)
+
+        return model_as, model_bs, np.asarray(model_ms)
+
+    def fit_model_numpy(
+        self,
+        wdl_data: WdlData,
+    ) -> ModelData:
+        if self.modelFitting != "None":
+            print(f"Fit WDL model based on {self.yData}.")
+        #
+        # for each value of mom of interest, find a(mom) and b(mom) so that the induced
+        # 1D win rate function best matches the observed win frequencies
+        #
+
+        exit(0)
+
+        model_as, model_bs, model_ms = self.extract_model_data_numpy(wdl_data)
+
+        if self.modelFitting == "None":
+            return ModelData([], [], np.asarray([]), [], [], "", "")
+
+        #
+        # now capture the functional behavior of a and b as functions of mom
+        #
+
+        # start with a simple polynomial fit to find p_a and p_b
+        coeffs_a, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_as)
+        coeffs_b, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_bs)
+
+        # possibly refine p_a and p_b by optimizing a given objective function
+        if self.modelFitting != "fitDensity":
+            objective_function = ObjectiveFunction(
+                self.modelFitting, win, draw, loss, self.yDataTarget
+            )
+
+            popt_all = coeffs_a.tolist() + coeffs_b.tolist()
+            print("Initial objective function: ", objective_function(popt_all))
+            popt_all, message = objective_function.minimize(popt_all)
+            coeffs_a = popt_all[0:4]  # store final p_a
+            coeffs_b = popt_all[4:8]  # store final p_b
+            print("Final objective function:   ", objective_function(popt_all))
+            print(message)
+
+        # prepare output
+        label_as = "as = " + self.plot.poly3_str(coeffs_a, self.yDataTarget)
+        label_bs = "bs = " + self.plot.poly3_str(coeffs_b, self.yDataTarget)
+
+        # now we can report the new conversion factor p_a from internal eval to centipawn
+        # such that an expected win score of 50% is for an internal eval of p_a(mom)
+        # for a static conversion (independent of mom), we provide a constant value
+        # NormalizeToPawnValue = int(p_a(yDataTarget)) = int(sum(coeffs_a))
+        fsum_a = sum(coeffs_a)
+        fsum_b = sum(coeffs_b)
+
+        if self.plot.setting != "no":
+            # this shows the fit of the observed wdl data at mom=yDataTarget to
+            # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
+            self.plot.create_sample_curve_y(fsum_a, fsum_b)
+
+        print(f"const int NormalizeToPawnValue = {int(fsum_a)};")
+        print(f"Corresponding spread = {int(fsum_b)};")
+        print(f"Corresponding normalized spread = {fsum_b / fsum_a};")
+        print(
+            f"Draw rate at 0.0 eval at move {self.yDataTarget} = {1 - 2 / (1 + np.exp(fsum_a / fsum_b))};"
+        )
+
+        print("Parameters in internal value units: ")
+
+        # output as and bs
+        print(label_as)
+        print(label_bs)
+        print(
+            "     constexpr double as[] = {%13.8f, %13.8f, %13.8f, %13.8f};"
+            % tuple(coeffs_a)
+        )
+        print(
+            "     constexpr double bs[] = {%13.8f, %13.8f, %13.8f, %13.8f };"
+            % tuple(coeffs_b)
+        )
+
+        return ModelData(
+            coeffs_a, coeffs_b, model_ms, model_as, model_bs, label_as, label_bs
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -730,24 +986,47 @@ if __name__ == "__main__":
 
     tic = time.time()
 
-    data_loader = DataLoader(args)
+    use_numpy = True
+    if not use_numpy:
+        data_loader = DataLoader(args)
 
-    win, draw, loss = data_loader.extract_wdl(args.moveMin, args.moveMax, args.yData)
+        win, draw, loss = data_loader.extract_wdl(
+            args.moveMin, args.moveMax, args.yData
+        )
 
-    if len(win) + len(draw) + len(loss) == 0:
-        print("No data was found!")
-        exit(0)
+        print("elapsed time:", time.time() - tic)
 
-    wdl_plot = WdlPlot(args, data_loader.normalize_to_pawn_value)
+        wdl_data = WdlData(args, eval_max=400)
+        wdl_data.load_wdl_data(args)
+        print("elapsed time:", time.time() - tic)
 
-    wdl_model = WdlModel(args, data_loader.normalize_to_pawn_value, wdl_plot)
+        if len(win) + len(draw) + len(loss) == 0:
+            print("No data was found!")
+            exit(0)
 
-    model_data_density = data_loader.get_model_data_density(win, draw, loss)
+        wdl_plot = WdlPlot(args, data_loader.normalize_to_pawn_value)
 
-    model = wdl_model.fit_model(model_data_density, win, draw, loss)
+        wdl_model = WdlModel(args, data_loader.normalize_to_pawn_value, wdl_plot)
 
-    if args.plot != "no":
-        wdl_plot.create_plots(model_data_density, model)
+        model_data_density = data_loader.get_model_data_density(win, draw, loss)
+
+        model = wdl_model.fit_model(model_data_density, win, draw, loss)
+
+        if args.plot != "no":
+            wdl_plot.create_plots(model_data_density, model)
+    else:
+        wdl_data = WdlData(args, eval_max=400)
+        wdl_data.load_wdl_data(args)
+        print("elapsed time:", time.time() - tic)
+
+        wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
+
+        wdl_model = WdlModel(args, wdl_data.normalize_to_pawn_value, wdl_plot)
+
+        model = wdl_model.fit_model_numpy(wdl_data)
+
+        if args.plot != "no":
+            wdl_plot.create_plots(model_data_density, model)
 
     if args.plot != "save+show":
         print(f"Total elapsed time = {time.time() - tic:.2f}s.")
