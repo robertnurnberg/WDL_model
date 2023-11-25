@@ -60,6 +60,7 @@ class WdlData:
     """stores the raw wdl data in three 2D numpy arrays"""
 
     def __init__(self, args, eval_max):
+        self.yData = args.yData
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
@@ -139,7 +140,7 @@ class WdlData:
                         self._losses[self.index(eval_internal, mom)] += value
 
         W, D, L = self._wins.sum(), self._draws.sum(), self._losses.sum()
-        print(f"Retained (W,D,L) = ({W}, {D}, {L} positions.")
+        print(f"Retained (W,D,L) = ({W}, {D}, {L}) positions.")
 
         if W + D + L == 0:
             print("No data was found!")
@@ -154,6 +155,36 @@ class WdlData:
         self._w_density[self.mask] = self._wins[self.mask] / total[self.mask]
         self._d_density[self.mask] = self._draws[self.mask] / total[self.mask]
         self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
+
+    def fit_abs_locally(self):
+        """find a(mom) and b(mom), for all mom, to best fit observed data"""
+        # filter mom values with less than 10 wins in total
+        total_wins = np.sum(self._wins, axis=0)
+        self.mom_mask = total_wins >= 10
+        if not np.all(self.mom_mask):
+            false_indices = np.where(~self.mom_mask)[0]
+            print(
+                f"Warning: Too little data, so skipping {self.yData} values",
+                np.where(~self.mom_mask)[0] + self.offset_mom,
+            )
+
+        model_ms, model_as, model_bs = [], [], []
+
+        for mom_idx in np.where(self.mom_mask)[0]:
+            eval_mask = self.mask[:, mom_idx]
+            xdata = np.where(eval_mask)[0] + self.offset_eval
+            ywindata = self._w_density[:, mom_idx][eval_mask]
+
+            # get initial values for a(mom) and b(mom) based on a simple fit of the curve
+            popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
+            popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
+
+            # store result
+            model_ms.append(mom_idx + self.offset_mom)
+            model_as.append(popt_ab[0])  # append a(mom)
+            model_bs.append(popt_ab[1])  # append b(mom)
+
+        return model_as, model_bs, np.asarray(model_ms)
 
 
 @dataclass
@@ -727,81 +758,6 @@ class WdlModel:
             coeffs_a, coeffs_b, model_ms, model_as, model_bs, label_as, label_bs
         )
 
-    def extract_model_data_numpy(
-        self,
-        wdl_data: WdlData,
-    ):
-        model_ms, model_as, model_bs = [], [], []
-
-        for mom in (
-            range(self.yDataMin, self.yDataMax + 1)
-            if self.modelFitting != "None"
-            else [self.yDataTarget]
-        ):
-            xdata, ywindata, ydrawdata, ylossdata = [], [], [], []
-            for i, momkey in enumerate(model_data_density.ys):
-                if not momkey == mom:
-                    continue
-                xdata.append(model_data_density.xs[i])
-                ywindata.append(model_data_density.zwins[i])
-                ydrawdata.append(model_data_density.zdraws[i])
-                ylossdata.append(model_data_density.zlosses[i])
-
-            # this shows the observed wdl data for mom=yDataTarget
-            if mom == self.yDataTarget and self.plot.setting != "no":
-                self.plot.create_sample_data_y(
-                    np.asarray(xdata), mom, ywindata, ydrawdata, ylossdata
-                )
-                if self.modelFitting == "None":
-                    break
-
-            if len(ywindata) < 10:
-                print(
-                    f"Warning: Too little data for {self.yData} value {mom}, skip fitting."
-                )
-                continue
-
-            # get initial values for a(mom) and b(mom) based on a simple fit of the curve
-            popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
-            popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
-
-            # refine the local result based on data, optimizing an objective function
-
-            if self.modelFitting != "fitDensity":
-                # get the subset of data relevant for this mom
-                winsubset: Counter[tuple[int, int]] = Counter()
-                drawsubset: Counter[tuple[int, int]] = Counter()
-                losssubset: Counter[tuple[int, int]] = Counter()
-                for (eval, momkey), count in win.items():
-                    if not momkey == mom:
-                        continue
-                    winsubset[eval, momkey] = count
-                for (eval, momkey), count in draw.items():
-                    if not momkey == mom:
-                        continue
-                    drawsubset[eval, momkey] = count
-                for (eval, momkey), count in loss.items():
-                    if not momkey == mom:
-                        continue
-                    losssubset[eval, momkey] = count
-
-                # minimize the objective function
-                objective_function = ObjectiveFunction(
-                    self.modelFitting,
-                    winsubset,
-                    drawsubset,
-                    losssubset,
-                    self.yDataTarget,
-                )
-                popt_ab, _ = objective_function.minimize(popt_ab)
-
-            # store result
-            model_ms.append(mom)
-            model_as.append(popt_ab[0])  # append a(mom)
-            model_bs.append(popt_ab[1])  # append b(mom)
-
-        return model_as, model_bs, np.asarray(model_ms)
-
     def fit_model_numpy(
         self,
         wdl_data: WdlData,
@@ -813,9 +769,7 @@ class WdlModel:
         # 1D win rate function best matches the observed win frequencies
         #
 
-        exit(0)
-
-        model_as, model_bs, model_ms = self.extract_model_data_numpy(wdl_data)
+        model_as, model_bs, model_ms = wdl_data.fit_abs_locally()
 
         if self.modelFitting == "None":
             return ModelData([], [], np.asarray([]), [], [], "", "")
@@ -827,20 +781,6 @@ class WdlModel:
         # start with a simple polynomial fit to find p_a and p_b
         coeffs_a, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_as)
         coeffs_b, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_bs)
-
-        # possibly refine p_a and p_b by optimizing a given objective function
-        if self.modelFitting != "fitDensity":
-            objective_function = ObjectiveFunction(
-                self.modelFitting, win, draw, loss, self.yDataTarget
-            )
-
-            popt_all = coeffs_a.tolist() + coeffs_b.tolist()
-            print("Initial objective function: ", objective_function(popt_all))
-            popt_all, message = objective_function.minimize(popt_all)
-            coeffs_a = popt_all[0:4]  # store final p_a
-            coeffs_b = popt_all[4:8]  # store final p_b
-            print("Final objective function:   ", objective_function(popt_all))
-            print(message)
 
         # prepare output
         label_as = "as = " + self.plot.poly3_str(coeffs_a, self.yDataTarget)
@@ -963,6 +903,10 @@ if __name__ == "__main__":
         default="fitDensity",
         help="Choice of model fitting: Fit the win rate curves, maximimize the probability of predicting the outcome, minimize the squared error in predicted score, or no fitting.",
     )
+    parser.add_argument(
+        "--usenumpy",
+        action="store_true",
+    )
 
     args = parser.parse_args()
 
@@ -986,19 +930,12 @@ if __name__ == "__main__":
 
     tic = time.time()
 
-    use_numpy = True
-    if not use_numpy:
+    if not args.usenumpy:
         data_loader = DataLoader(args)
 
         win, draw, loss = data_loader.extract_wdl(
             args.moveMin, args.moveMax, args.yData
         )
-
-        print("elapsed time:", time.time() - tic)
-
-        wdl_data = WdlData(args, eval_max=400)
-        wdl_data.load_wdl_data(args)
-        print("elapsed time:", time.time() - tic)
 
         if len(win) + len(draw) + len(loss) == 0:
             print("No data was found!")
@@ -1015,9 +952,8 @@ if __name__ == "__main__":
         if args.plot != "no":
             wdl_plot.create_plots(model_data_density, model)
     else:
-        wdl_data = WdlData(args, eval_max=400)
+        wdl_data = WdlData(args, eval_max=400)  # TODO: make cli parameter
         wdl_data.load_wdl_data(args)
-        print("elapsed time:", time.time() - tic)
 
         wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
 
