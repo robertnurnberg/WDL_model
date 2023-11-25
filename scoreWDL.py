@@ -157,7 +157,7 @@ class WdlData:
         self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
 
     def fit_abs_locally(self):
-        """find a(mom) and b(mom), for all mom, to best fit observed data"""
+        """find a(mom) and b(mom), for all mom, that best fit observed data"""
         # filter mom values with less than 10 wins in total
         total_wins = np.sum(self._wins, axis=0)
         self.mom_mask = total_wins >= 10
@@ -168,23 +168,25 @@ class WdlData:
                 np.where(~self.mom_mask)[0] + self.offset_mom,
             )
 
-        model_ms, model_as, model_bs = [], [], []
+        # prepare the values of mom for which we will fit a and b locally
+        model_ms = np.where(self.mom_mask)[0] + self.offset_mom
+        model_as = np.empty_like(model_ms, dtype=float)
+        model_bs = np.empty_like(model_ms, dtype=float)
 
-        for mom_idx in np.where(self.mom_mask)[0]:
-            eval_mask = self.mask[:, mom_idx]
-            xdata = np.where(eval_mask)[0] + self.offset_eval
-            ywindata = self._w_density[:, mom_idx][eval_mask]
+        for i in range(len(model_ms)):
+            mom_idx = model_ms[i] - self.offset_mom  # recover the index of mom
+            eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
+            xdata = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
+            ywindata = self._w_density[:, mom_idx][eval_mask]  # get density column
 
             # get initial values for a(mom) and b(mom) based on a simple fit of the curve
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
             popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
 
-            # store result
-            model_ms.append(mom_idx + self.offset_mom)
-            model_as.append(popt_ab[0])  # append a(mom)
-            model_bs.append(popt_ab[1])  # append b(mom)
+            model_as[i] = popt_ab[0]  # store a(mom)
+            model_bs[i] = popt_ab[1]  # store b(mom)
 
-        return model_as, model_bs, np.asarray(model_ms)
+        return model_as, model_bs, model_ms
 
 
 @dataclass
