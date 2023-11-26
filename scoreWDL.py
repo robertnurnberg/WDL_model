@@ -61,6 +61,7 @@ class WdlData:
 
     def __init__(self, args, eval_max):
         self.yData = args.yData
+        self.filename = args.filename
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
@@ -79,6 +80,7 @@ class WdlData:
             )
         )
 
+        # numpy arrays have nonnegative indices, so save dims and offsets for later
         self.dim_mom = args.yDataMax - args.yDataMin + 1
         self.offset_mom = args.yDataMin
         self.eval_max = round(eval_max * self.normalize_to_pawn_value / 100)
@@ -86,32 +88,36 @@ class WdlData:
         self.offset_eval = -self.eval_max
 
         # set up three arrays, each counting positions with a given internal eval and mom (move/material)
-        self._wins = np.zeros(
-            (self.dim_eval, self.dim_mom), dtype=int
-        )  # TODO: check if fortran order is faster
+        # TODO: investigate if sparse matrix data structure is faster overall
+        # TODO: check if fortran order is faster
+        self._wins = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
         self._draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
         self._losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
 
-    def index(self, eval, mom):
-        return eval - self.offset_eval, mom - self.offset_mom
+    def add_to_wdl_counters(self, result, eval, mom, value):
+        eval_idx, mom_idx = eval - self.offset_eval, mom - self.offset_mom
+        if result == "W":
+            self._wins[eval_idx, mom_idx] += value
+        elif result == "D":
+            self._draws[eval_idx, mom_idx] += value
+        elif result == "L":
+            self._losses[eval_idx, mom_idx] += value
 
-    def load_wdl_data(self, args):
+    def load_json_data(self, move_min, move_max):
         """load the WDL data from json: the keys describe the position (result, move, material, eval),
         and the values are the observed count of these positions"""
-        for filename in args.filename:
+        for filename in self.filenames:
             print(f"Reading eval stats from {filename}.")
             with open(filename) as infile:
                 data = json.load(infile)
-                if not data:
-                    data = {}
 
-                for key, value in data.items():
+                for key, value in data.items() if data else []:
                     result, move, material, eval = literal_eval(key)
 
-                    if move < args.moveMin or move > args.moveMax:
+                    if move < move_min or move > move_max:
                         continue
 
-                    mom = move if args.yData == "move" else material
+                    mom = move if self.yData == "move" else material
 
                     # convert the cp eval to the internal value by undoing the normalization
                     if self.NormalizeData is None:
@@ -129,15 +135,8 @@ class WdlData:
                         )
                     eval_internal = round(eval * a_internal / 100)
 
-                    if abs(eval_internal) > self.eval_max:
-                        continue
-
-                    if result == "W":
-                        self._wins[self.index(eval_internal, mom)] += value
-                    elif result == "D":
-                        self._draws[self.index(eval_internal, mom)] += value
-                    elif result == "L":
-                        self._losses[self.index(eval_internal, mom)] += value
+                    if abs(eval_internal) <= self.eval_max:
+                        self.add_to_wdl_counters(result, eval_internal, mom, value)
 
         W, D, L = self._wins.sum(), self._draws.sum(), self._losses.sum()
         print(f"Retained (W,D,L) = ({W}, {D}, {L}) positions.")
@@ -147,6 +146,7 @@ class WdlData:
             exit(0)
 
         # define wdl densities: if total = 0, entries will be -1.0
+        # TODO: try setting them to NaN instead
         total = self._wins + self._draws + self._losses
         self.mask = total > 0
         self._w_density = -1.0 * np.ones_like(total)
@@ -174,12 +174,13 @@ class WdlData:
         model_bs = np.empty_like(model_ms, dtype=float)
 
         for i in range(len(model_ms)):
-            mom_idx = model_ms[i] - self.offset_mom  # recover the index of mom
+            mom_idx = model_ms[i] - self.offset_mom  # recover the array index of mom
+            # TODO: make this into a member function: get_wdl_density_columns
             eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
             xdata = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
             ywindata = self._w_density[:, mom_idx][eval_mask]  # get density column
 
-            # get initial values for a(mom) and b(mom) based on a simple fit of the curve
+            # find a(mom) and b(mom) via a simple fit of win_rate() to the densities
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
             popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
 
@@ -955,7 +956,7 @@ if __name__ == "__main__":
             wdl_plot.create_plots(model_data_density, model)
     else:
         wdl_data = WdlData(args, eval_max=400)  # TODO: make cli parameter
-        wdl_data.load_wdl_data(args)
+        wdl_data.load_json_data(args.moveMin, args.moveMax)
 
         wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
 
