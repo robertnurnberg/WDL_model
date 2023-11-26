@@ -182,8 +182,7 @@ class WdlData:
         """for backward compatibility, to allow easy contour plotting"""
         # TODO: try to remove
         valid_data = np.where(self.mask)
-        valid_data = np.where(~np.isnan(self.w_density)) # TODO: remove
-        xs, ys = valid_data[0] - self.offset_eval, valid_data[1] - self.offset_mom
+        xs, ys = valid_data[0] + self.offset_eval, valid_data[1] + self.offset_mom
         zwins = self.w_density[valid_data]
         zdraws = self.d_density[valid_data]
         zlosses = self.l_density[valid_data]
