@@ -106,8 +106,11 @@ class WdlData:
         self.draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
         self.losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
 
+    def idx(self, eval, mom):
+        return eval - self.offset_eval, mom - self.offset_mom
+
     def add_to_wdl_counters(self, result, eval, mom, value):
-        eval_idx, mom_idx = eval - self.offset_eval, mom - self.offset_mom
+        eval_idx, mom_idx = self.idx(eval, mom)
         if result == "W":
             self.wins[eval_idx, mom_idx] += value
         elif result == "D":
@@ -188,7 +191,7 @@ class WdlData:
         zlosses = self.l_density[valid_data]
         return ModelDataDensity(xs, ys, zwins, zdraws, zlosses)
 
-    def fit_abs_locally(self):
+    def fit_abs_locally(self, modelFitting):
         """for each value of mom of interest, find a(mom) and b(mom) so that the induced
         1D win rate function best matches the observed win frequencies"""
 
@@ -208,11 +211,21 @@ class WdlData:
         model_bs = np.empty_like(model_ms, dtype=float)
 
         for i in range(len(model_ms)):
-            xdata, ywindata, _, _ = self.get_wdl_density_columns(model_ms[i])
+            xdata, ywindata, ydrawdata, ylossdata = self.get_wdl_density_columns(model_ms[i])
 
             # find a(mom) and b(mom) via a simple fit of win_rate() to the densities
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
             popt_ab, _ = curve_fit(win_rate, xdata, ywindata, popt_ab)
+
+            # refine the local result based on data, optimizing an objective function
+            if modelFitting != "fitDensity":
+                # minimize the objective function
+                objective_function = ObjectiveFunction(
+                    modelFitting,
+                    xdata, ywindata, ydrawdata, ylossdata,
+                    self.yDataTarget,
+                )
+                popt_ab, _ = objective_function.minimize(popt_ab)
 
             model_as[i] = popt_ab[0]  # store a(mom)
             model_bs[i] = popt_ab[1]  # store b(mom)
@@ -386,6 +399,100 @@ class ObjectiveFunction:
         ]:
             for (eval, mom), count in d:
                 scoreErr += count * (self.estimateScore(asbs, eval, mom) - score) ** 2
+
+        return scoreErr
+
+    def evalLogProbability(self, asbs: list[float]):
+        """-log(product of game outcome probability)"""
+        evalLogProb = 0
+
+        for (eval, mom), count in self.win.items():
+            a, b = self.get_ab(asbs, mom)
+            prob = win_rate(eval, a, b)
+            evalLogProb += count * np.log(max(prob, 1e-14))
+
+        for (eval, mom), count in self.draw.items():
+            a, b = self.get_ab(asbs, mom)
+            probw = win_rate(eval, a, b)
+            probl = loss_rate(eval, a, b)
+            prob = 1 - probw - probl
+            evalLogProb += count * np.log(max(prob, 1e-14))
+
+        for (eval, mom), count in self.loss.items():
+            a, b = self.get_ab(asbs, mom)
+            prob = loss_rate(eval, a, b)
+            evalLogProb += count * np.log(max(prob, 1e-14))
+
+        return -evalLogProb
+
+    def __call__(self, asbs):
+        return 0 if self._objective_function is None else self._objective_function(asbs)
+
+    def minimize(self, initial_ab):
+        if self._objective_function is None:
+            return initial_ab, "No objective function defined, return initial guess."
+
+        res = minimize(
+            self._objective_function,
+            initial_ab,
+            method="Powell",
+            options={"maxiter": 100000, "disp": False, "xtol": 1e-6},
+        )
+        return res.x, res.message
+
+class ObjectiveFunction_numpy:
+    """Provides objective functions that can be minimized to fit the win draw loss data"""
+
+    def __init__(
+        self,
+        modelFitting: str,
+        wdl_data: WdlData,
+        moms: list[int],
+        y_data_target: int,
+    ):
+        if modelFitting == "optimizeScore":
+            # minimize the l2 error of the predicted score
+            self._objective_function = self.scoreError
+        elif modelFitting == "optimizeProbability":
+            # maximize the likelihood of predicting the game outcome
+            self._objective_function = self.evalLogProbability
+        else:
+            self._objective_function = None
+        self.wdl_data = wdl_data
+        self.moms = moms
+        self.y_data_target = y_data_target
+
+    def get_ab(self, asbs: list[float], mom: int):
+        # returns p_a(mom), p_b(mom) or a(mom), b(mom) depending on optimization stage
+        if len(asbs) == 8:
+            coeffs_a = asbs[0:4]
+            coeffs_b = asbs[4:8]
+            a = poly3(mom / self.y_data_target, *coeffs_a)
+            b = poly3(mom / self.y_data_target, *coeffs_b)
+        else:
+            a = asbs[0]
+            b = asbs[1]
+
+        return a, b
+
+    def estimateScore(self, asbs: list[float], eval: int, mom: int):
+        """Estimate game score based on probability of WDL"""
+
+        a, b = self.get_ab(asbs, mom)
+        probw = win_rate(eval, a, b)
+        probl = loss_rate(eval, a, b)
+        probd = 1 - probw - probl
+        return probw + 0.5 * probd + 0
+
+    def scoreError(self, asbs: list[float]):
+        """Sum of the squared error on the game score"""
+        scoreErr = 0
+
+        for mom in self.moms:
+            evals, w, d, l = wdl_data.get_wdl_density_columns(mom)
+            for a, score in [(w, 1), (d, 0.5), (l, 0)]:
+                for i in range(len(evals)):
+                    scoreErr += a[wdl_model.idx(eval, mom)] * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
 
         return scoreErr
 
@@ -800,7 +907,7 @@ class WdlModel_numpy:
         print(f"Fit WDL model based on {wdl_data.yData}.")
 
         # for each value of mom of interest, find good fits for a(mom) and b(mom)
-        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally()
+        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally(self.modelFitting)
 
         # now capture the functional behavior of a and b as functions of mom,
         # starting with a simple polynomial fit to find p_a and p_b
