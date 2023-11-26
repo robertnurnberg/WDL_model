@@ -61,7 +61,7 @@ class WdlData:
 
     def __init__(self, args, eval_max):
         self.yData = args.yData
-        self.filename = args.filename
+        self.filenames = args.filename
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
@@ -156,11 +156,23 @@ class WdlData:
         self._d_density[self.mask] = self._draws[self.mask] / total[self.mask]
         self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
 
+    def get_wdl_density_columns(self, mom):
+        """return views of the three 2d density arrays for the given value of mom"""
+        mom_idx = mom - self.offset_mom  # recover the array index of mom
+        eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
+        row_idxs = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
+        w = self._w_density[:, mom_idx][eval_mask]
+        d = self._d_density[:, mom_idx][eval_mask]
+        l = self._l_density[:, mom_idx][eval_mask]
+        return row_idxs, w, d, l
+
     def fit_abs_locally(self):
-        """find a(mom) and b(mom), for all mom, that best fit observed data"""
+        """for each value of mom of interest, find a(mom) and b(mom) so that the induced
+        1D win rate function best matches the observed win frequencies"""
+
         # filter mom values with less than 10 wins in total
         total_wins = np.sum(self._wins, axis=0)
-        self.mom_mask = total_wins >= 10
+        self.mom_mask = total_wins >= 10  # TODO: make cli parameter
         if not np.all(self.mom_mask):
             false_indices = np.where(~self.mom_mask)[0]
             print(
@@ -174,11 +186,7 @@ class WdlData:
         model_bs = np.empty_like(model_ms, dtype=float)
 
         for i in range(len(model_ms)):
-            mom_idx = model_ms[i] - self.offset_mom  # recover the array index of mom
-            # TODO: make this into a member function: get_wdl_density_columns
-            eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
-            xdata = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
-            ywindata = self._w_density[:, mom_idx][eval_mask]  # get density column
+            xdata, ywindata, _, _ = self.get_wdl_density_columns(model_ms[i])
 
             # find a(mom) and b(mom) via a simple fit of win_rate() to the densities
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
@@ -187,7 +195,7 @@ class WdlData:
             model_as[i] = popt_ab[0]  # store a(mom)
             model_bs[i] = popt_ab[1]  # store b(mom)
 
-        return model_as, model_bs, model_ms
+        return model_ms, model_as, model_bs
 
 
 @dataclass
@@ -728,8 +736,7 @@ class WdlModel:
         # such that an expected win score of 50% is for an internal eval of p_a(mom)
         # for a static conversion (independent of mom), we provide a constant value
         # NormalizeToPawnValue = int(p_a(yDataTarget)) = int(sum(coeffs_a))
-        fsum_a = sum(coeffs_a)
-        fsum_b = sum(coeffs_b)
+        fsum_a, fsum_b = sum(coeffs_a), sum(coeffs_b)
 
         if self.plot.setting != "no":
             # this shows the fit of the observed wdl data at mom=yDataTarget to
@@ -761,45 +768,47 @@ class WdlModel:
             coeffs_a, coeffs_b, model_ms, model_as, model_bs, label_as, label_bs
         )
 
-    def fit_model_numpy(
+
+class WdlModel_numpy:
+    def __init__(self, args):
+        self.yDataTarget = args.yDataTarget
+        self.modelFitting = args.modelFitting
+
+    def poly3_str(self, coeffs: list[float]) -> str:
+        return (
+            "((%5.3f * x / %d + %5.3f) * x / %d + %5.3f) * x / %d + %5.3f"
+            % tuple(
+                val for pair in zip(coeffs, [self.yDataTarget] * 4) for val in pair
+            )[:-1]
+        )
+
+    def fit_ab_globally(
         self,
         wdl_data: WdlData,
     ) -> ModelData:
-        if self.modelFitting != "None":
-            print(f"Fit WDL model based on {self.yData}.")
-        #
-        # for each value of mom of interest, find a(mom) and b(mom) so that the induced
-        # 1D win rate function best matches the observed win frequencies
-        #
+        print(f"Fit WDL model based on {wdl_data.yData}.")
 
-        model_as, model_bs, model_ms = wdl_data.fit_abs_locally()
+        # for each value of mom of interest, find good fits for a(mom) and b(mom)
+        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally()
 
-        if self.modelFitting == "None":
-            return ModelData([], [], np.asarray([]), [], [], "", "")
-
-        #
-        # now capture the functional behavior of a and b as functions of mom
-        #
-
-        # start with a simple polynomial fit to find p_a and p_b
-        coeffs_a, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_as)
-        coeffs_b, _ = curve_fit(poly3, model_ms / self.yDataTarget, model_bs)
+        # now capture the functional behavior of a and b as functions of mom,
+        # starting with a simple polynomial fit to find p_a and p_b
+        self.coeffs_a, _ = curve_fit(
+            poly3, self.model_ms / self.yDataTarget, self.model_as
+        )
+        self.coeffs_b, _ = curve_fit(
+            poly3, self.model_ms / self.yDataTarget, self.model_bs
+        )
 
         # prepare output
-        label_as = "as = " + self.plot.poly3_str(coeffs_a, self.yDataTarget)
-        label_bs = "bs = " + self.plot.poly3_str(coeffs_b, self.yDataTarget)
+        self.label_as = "as = " + self.poly3_str(self.coeffs_a)
+        self.label_bs = "bs = " + self.poly3_str(self.coeffs_b)
 
         # now we can report the new conversion factor p_a from internal eval to centipawn
         # such that an expected win score of 50% is for an internal eval of p_a(mom)
         # for a static conversion (independent of mom), we provide a constant value
         # NormalizeToPawnValue = int(p_a(yDataTarget)) = int(sum(coeffs_a))
-        fsum_a = sum(coeffs_a)
-        fsum_b = sum(coeffs_b)
-
-        if self.plot.setting != "no":
-            # this shows the fit of the observed wdl data at mom=yDataTarget to
-            # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
-            self.plot.create_sample_curve_y(fsum_a, fsum_b)
+        fsum_a, fsum_b = sum(self.coeffs_a), sum(self.coeffs_b)
 
         print(f"const int NormalizeToPawnValue = {int(fsum_a)};")
         print(f"Corresponding spread = {int(fsum_b)};")
@@ -809,22 +818,167 @@ class WdlModel:
         )
 
         print("Parameters in internal value units: ")
-
-        # output as and bs
-        print(label_as)
-        print(label_bs)
+        print(self.label_as + "\n" + self.label_bs)
         print(
             "     constexpr double as[] = {%13.8f, %13.8f, %13.8f, %13.8f};"
-            % tuple(coeffs_a)
+            % tuple(self.coeffs_a)
         )
         print(
             "     constexpr double bs[] = {%13.8f, %13.8f, %13.8f, %13.8f };"
-            % tuple(coeffs_b)
+            % tuple(self.coeffs_b)
         )
 
-        return ModelData(
-            coeffs_a, coeffs_b, model_ms, model_as, model_bs, label_as, label_bs
+
+class WdlPlot_numpy:
+    def __init__(self, args, normalize_to_pawn_value: int):
+        self.setting = args.plot
+        if self.setting == "no":
+            return
+
+        self.pgnName = args.pgnName
+        self.normalize_to_pawn_value = normalize_to_pawn_value
+        self.yPlotMin = args.yPlotMin
+
+        self.fig, self.axs = plt.subplots(  # set figure size to A4 x 1.5
+            2, 3, figsize=(11.69 * 1.5, 8.27 * 1.5), constrained_layout=True
         )
+        self.fig.suptitle(
+            "Summary of win-draw-loss "
+            + ("data" if args.modelFitting == "None" else "model analysis"),
+            fontsize="x-large",
+        )
+
+    def normalized_axis(self, i, j):
+        """provides a second x-axis in pawns, to go with the original axis in internal eval
+        if the engine used a dynamic normalization, the labels will only be exact for
+        the old yDataTarget value for mom (move or material counter)"""
+        eval_min, eval_max = self.axs[i, j].get_xlim()
+        halfpawn_value = self.normalize_to_pawn_value / 2
+        halfpawn_ticks = np.arange(
+            eval_min / halfpawn_value, eval_max / halfpawn_value + 1, dtype=int
+        )
+        ax2 = self.axs[i, j].twiny()
+        ax2.set_xticks(halfpawn_ticks * halfpawn_value)  # ticks at full and half pawns
+        ax2.set_xticklabels(["" if z % 2 else str(z // 2) for z in halfpawn_ticks])
+        ax2.set_xlim(eval_min, eval_max)  # align the data range with original axis
+
+    def sample_wdl_densities(self, wdl_data, mom):
+        """plot wdl sample data at a fixed mom value"""
+        xdata, ywindata, ydrawdata, ylossdata = wdl_data.get_wdl_density_columns(mom)
+        self.axs[0, 0].plot(xdata, ywindata, "b.", label="Measured winrate")
+        self.axs[0, 0].plot(xdata, ydrawdata, "g.", label="Measured drawrate")
+        self.axs[0, 0].plot(xdata, ylossdata, "c.", label="Measured lossrate")
+
+        self.axs[0, 0].set_xlabel(
+            "Evaluation [lower: Internal Value units, upper: Pawns]"
+        )
+        self.axs[0, 0].set_ylabel("outcome")
+        self.axs[0, 0].legend(fontsize="small")
+        self.axs[0, 0].set_title(f"Measured data at {wdl_data.yData} {mom}")
+        # plot between -3 and 3 pawns
+        xmax = ((3 * self.normalize_to_pawn_value) // 100 + 1) * 100
+        self.axs[0, 0].set_xlim([-xmax, xmax])
+
+        self.normalized_axis(0, 0)
+
+    def sample_wdl_curves(self, a, b):
+        """add the three wdl model curves to subplot axs[0, 0]"""
+        xdata = np.linspace(*self.axs[0, 0].get_xlim(), num=1000)
+        winmodel = win_rate(xdata, a, b)
+        lossmodel = loss_rate(xdata, a, b)
+        self.axs[0, 0].plot(xdata, winmodel, "r-", label="Model")
+        self.axs[0, 0].plot(xdata, lossmodel, "r-")
+        self.axs[0, 0].plot(xdata, 1 - winmodel - lossmodel, "r-")
+        self.axs[0, 0].set_title(
+            "Comparison of model and m" + self.axs[0, 0].title.get_text()[1:]
+        )
+
+    def contour_plots(self, wdl_data: WdlData, model: WdlModel_numpy):
+        print("Preparing contour plots.")
+
+        plot_fitted_model = model is not None
+        if plot_fitted_model:
+            # graphs of a and b as a function of move/material
+            self.axs[1, 0].plot(model.model_ms, model.model_as, "b.", label="as")
+            self.axs[1, 0].plot(
+                model.model_ms,
+                poly3(model.model_ms / model.yDataTarget, *model.coeffs_a),
+                "r-",
+                label="fit: " + model.label_as,
+            )
+            self.axs[1, 0].plot(model.model_ms, model.model_bs, "g.", label="bs")
+            self.axs[1, 0].plot(
+                model.model_ms,
+                poly3(model.model_ms / model.yDataTarget, *model.coeffs_b),
+                "m-",
+                label="fit: " + model.label_bs,
+            )
+
+            self.axs[1, 0].set_xlabel(model.yData)
+            self.axs[1, 0].set_ylabel("parameters (in internal value units)")
+            self.axs[1, 0].legend(fontsize="x-small")
+            self.axs[1, 0].set_title("Winrate model parameters")
+            self.axs[1, 0].set_ylim(bottom=0.0)
+
+        # now generate contour plots
+        contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
+
+        ylabelStr = model.yData + " (1,3,3,5,9)" * bool(model.yData == "material")
+        ymin, ymax = self.yPlotMin, model.yDataMax
+        points = np.array(list(zip(model_data_density.xs, model_data_density.ys)))
+
+        for j, j_str in enumerate(["win", "draw"]):
+            # for wins, plot between -1 and 3 pawns, for draws between -2 and 2 pawns
+            xmin = -(((1 + j) * self.normalize_to_pawn_value) // 100 + 1) * 100
+            xmax = (((3 - j) * self.normalize_to_pawn_value) // 100 + 1) * 100
+            grid_x, grid_y = np.mgrid[xmin:xmax:30j, ymin:ymax:22j]  # use a 30x22 grid
+
+            for i, i_str in enumerate(
+                ["Data", "Model"] if plot_fitted_model else ["Data"]
+            ):
+                self.axs[i, 1 + j].yaxis.grid(True)
+                self.axs[i, 1 + j].xaxis.grid(True)
+                self.axs[i, 1 + j].set_xlabel(
+                    "Evaluation [lower: Internal Value units, upper: Pawns]"
+                )
+                self.axs[i, 1 + j].set_ylabel(ylabelStr)
+
+                zz: np.ndarray | list[float]
+                if i_str == "Data":
+                    zz = model_data_density.zdraws if j else model_data_density.zwins
+                else:
+                    zz = cast(
+                        np.ndarray,
+                        model_wdl_rates(
+                            np.asarray(model_data_density.xs),
+                            np.asarray(model_data_density.ys),
+                            self.yDataTarget,
+                            model.coeffs_a,
+                            model.coeffs_b,
+                        )[j],
+                    )
+                zz = griddata(points, zz, (grid_x, grid_y))
+                cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
+
+                CS = self.axs[i, 1 + j].contour(
+                    grid_x, grid_y, zz, contourlines, colors="black"
+                )
+                self.axs[i, 1 + j].clabel(CS, inline=1, colors="black")
+                self.axs[i, 1 + j].set_title(
+                    i_str + ": Fraction of positions leading to a " + j_str
+                )
+                self.normalized_axis(i, 1 + j)
+
+        self.fig.colorbar(cp, ax=self.axs[:, -1], shrink=0.6)
+        self.fig.align_labels()
+        self.save()
+
+    def save(self):
+        plt.savefig(self.pgnName, dpi=300)
+        if self.setting == "save+show":
+            plt.show()
+        plt.close()
+        print(f"Saved graphics to {self.pgnName}.")
 
 
 if __name__ == "__main__":
@@ -958,14 +1112,22 @@ if __name__ == "__main__":
         wdl_data = WdlData(args, eval_max=400)  # TODO: make cli parameter
         wdl_data.load_json_data(args.moveMin, args.moveMax)
 
-        wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
-
-        wdl_model = WdlModel(args, wdl_data.normalize_to_pawn_value, wdl_plot)
-
-        model = wdl_model.fit_model_numpy(wdl_data)
+        if args.modelFitting != "None":
+            wdl_model = WdlModel_numpy(args)
+            wdl_model.fit_ab_globally(wdl_data)
+        else:
+            wdl_model = None
 
         if args.plot != "no":
-            wdl_plot.create_plots(model_data_density, model)
+            wdl_plot = WdlPlot_numpy(args, wdl_data.normalize_to_pawn_value)
+            wdl_plot.plot_wdl_densities(wdl_data, wdl_data.yDataTarget)
+            if wdl_model:
+                # this shows the fit of the observed wdl data at mom=yDataTarget to
+                # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
+                fsum_a, fsum_b = sum(coeffs_a), sum(coeffs_b)
+                wdl_plot.plot_wdl_curves(fsum_a, fsum_b)
+
+            wdl_plot.contour_plots(model_data_density, wdl_model)
 
     if args.plot != "save+show":
         print(f"Total elapsed time = {time.time() - tic:.2f}s.")
