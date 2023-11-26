@@ -56,6 +56,17 @@ def model_wdl_rates(
     return w, 1 - w - l, l
 
 
+@dataclass
+class ModelDataDensity:
+    """Count data converted to densities"""
+
+    xs: list[int]  # internal evals
+    ys: list[int]  # mom counters (mom = move or material)
+    zwins: list[float]  # corresponding win probabilities
+    zdraws: list[float]  # draw probabilities
+    zlosses: list[float]  # loss probabilities
+
+
 class WdlData:
     """stores the raw wdl data in three 2D numpy arrays"""
 
@@ -91,18 +102,18 @@ class WdlData:
         # set up three arrays, each counting positions with a given internal eval and mom (move/material)
         # TODO: investigate if sparse matrix data structure is faster overall
         # TODO: check if fortran order is faster
-        self._wins = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
-        self._draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
-        self._losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+        self.wins = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+        self.draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+        self.losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
 
     def add_to_wdl_counters(self, result, eval, mom, value):
         eval_idx, mom_idx = eval - self.offset_eval, mom - self.offset_mom
         if result == "W":
-            self._wins[eval_idx, mom_idx] += value
+            self.wins[eval_idx, mom_idx] += value
         elif result == "D":
-            self._draws[eval_idx, mom_idx] += value
+            self.draws[eval_idx, mom_idx] += value
         elif result == "L":
-            self._losses[eval_idx, mom_idx] += value
+            self.losses[eval_idx, mom_idx] += value
 
     def load_json_data(self, move_min, move_max):
         """load the WDL data from json: the keys describe the position (result, move, material, eval),
@@ -139,7 +150,7 @@ class WdlData:
                     if abs(eval_internal) <= self.eval_max:
                         self.add_to_wdl_counters(result, eval_internal, mom, value)
 
-        W, D, L = self._wins.sum(), self._draws.sum(), self._losses.sum()
+        W, D, L = self.wins.sum(), self.draws.sum(), self.losses.sum()
         print(f"Retained (W,D,L) = ({W}, {D}, {L}) positions.")
 
         if W + D + L == 0:
@@ -148,31 +159,42 @@ class WdlData:
 
         # define wdl densities: if total = 0, entries will be NaN
         # TODO: try setting them to NaN instead
-        total = self._wins + self._draws + self._losses
+        total = self.wins + self.draws + self.losses
         self.mask = total > 0
-        self._w_density = np.full_like(total, np.NaN, dtype=float)
-        self._d_density = np.full_like(total, np.NaN, dtype=float)
-        self._l_density = np.full_like(total, np.NaN, dtype=float)
-        self._w_density[self.mask] = self._wins[self.mask] / total[self.mask]
-        self._d_density[self.mask] = self._draws[self.mask] / total[self.mask]
-        self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
+        self.w_density = np.full_like(total, np.NaN, dtype=float)
+        self.d_density = np.full_like(total, np.NaN, dtype=float)
+        self.l_density = np.full_like(total, np.NaN, dtype=float)
+        self.w_density[self.mask] = self.wins[self.mask] / total[self.mask]
+        self.d_density[self.mask] = self.draws[self.mask] / total[self.mask]
+        self.l_density[self.mask] = self.losses[self.mask] / total[self.mask]
 
     def get_wdl_density_columns(self, mom):
         """return views of the three 2d density arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
         eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
         row_idxs = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
-        w = self._w_density[:, mom_idx][eval_mask]
-        d = self._d_density[:, mom_idx][eval_mask]
-        l = self._l_density[:, mom_idx][eval_mask]
+        w = self.w_density[:, mom_idx][eval_mask]
+        d = self.d_density[:, mom_idx][eval_mask]
+        l = self.l_density[:, mom_idx][eval_mask]
         return row_idxs, w, d, l
+
+    def get_model_data_density(self) -> ModelDataDensity:
+        """for backward compatibility, to allow easy contour plotting"""
+        # TODO: try to remove
+        valid_data = np.where(self.mask)
+        valid_data = np.where(~np.isnan(self.w_density)) # TODO: remove
+        xs, ys = valid_data[0] - self.offset_eval, valid_data[1] - self.offset_mom
+        zwins = self.w_density[valid_data]
+        zdraws = self.d_density[valid_data]
+        zlosses = self.l_density[valid_data]
+        return ModelDataDensity(xs, ys, zwins, zdraws, zlosses)
 
     def fit_abs_locally(self):
         """for each value of mom of interest, find a(mom) and b(mom) so that the induced
         1D win rate function best matches the observed win frequencies"""
 
         # filter mom values with less than 10 wins in total
-        total_wins = np.sum(self._wins, axis=0)
+        total_wins = np.sum(self.wins, axis=0)
         self.mom_mask = total_wins >= 10  # TODO: make cli parameter
         if not np.all(self.mom_mask):
             false_indices = np.where(~self.mom_mask)[0]
@@ -197,17 +219,6 @@ class WdlData:
             model_bs[i] = popt_ab[1]  # store b(mom)
 
         return model_ms, model_as, model_bs
-
-
-@dataclass
-class ModelDataDensity:
-    """Count data converted to densities"""
-
-    xs: list[int]  # internal evals
-    ys: list[int]  # mom counters (mom = move or material)
-    zwins: list[float]  # corresponding win probabilities
-    zdraws: list[float]  # draw probabilities
-    zlosses: list[float]  # loss probabilities
 
 
 class DataLoader:
@@ -921,16 +932,19 @@ class WdlPlot_numpy:
             self.axs[1, 0].set_title("Winrate model parameters")
             self.axs[1, 0].set_ylim(bottom=0.0)
 
+        model_data_density = wdl_data.get_model_data_density()
+
         # now generate contour plots
         contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
 
         ylabelStr = wdl_data.yData + " (1,3,3,5,9)" * bool(wdl_data.yData == "material")
         ymin, ymax = self.yPlotMin, wdl_data.yDataMax
+        points = np.array(list(zip(model_data_density.xs, model_data_density.ys)))
 
         for j, j_str in enumerate(["win", "draw"]):
             # for wins, plot between -1 and 3 pawns, for draws between -2 and 2 pawns
-            xmin = -(((1 + j) * self.normalize_to_pawn_value) // 100 + 1) * 100
-            xmax = (((3 - j) * self.normalize_to_pawn_value) // 100 + 1) * 100
+            xmin = -(((1 + j) * wdl_data.normalize_to_pawn_value) // 100 + 1) * 100
+            xmax = (((3 - j) * wdl_data.normalize_to_pawn_value) // 100 + 1) * 100
             grid_x, grid_y = np.mgrid[xmin:xmax:30j, ymin:ymax:22j]  # use a 30x22 grid
 
             for i, i_str in enumerate(
@@ -943,19 +957,33 @@ class WdlPlot_numpy:
                 )
                 self.axs[i, 1 + j].set_ylabel(ylabelStr)
 
-                # zz = griddata(points, zz, (grid_x, grid_y))
-                # cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
+                zz: np.ndarray | list[float]
+                if i_str == "Data":
+                    zz = model_data_density.zdraws if j else model_data_density.zwins
+                else:
+                    zz = cast(
+                        np.ndarray,
+                        model_wdl_rates(
+                            np.asarray(model_data_density.xs),
+                            np.asarray(model_data_density.ys),
+                            wdl_data.yDataTarget,
+                            model.coeffs_a,
+                            model.coeffs_b,
+                        )[j],
+                    )
+                zz = griddata(points, zz, (grid_x, grid_y))
+                cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
 
-                # CS = self.axs[i, 1 + j].contour(
-                #    grid_x, grid_y, zz, contourlines, colors="black"
-                # )
-                # self.axs[i, 1 + j].clabel(CS, inline=1, colors="black")
+                CS = self.axs[i, 1 + j].contour(
+                    grid_x, grid_y, zz, contourlines, colors="black"
+                )
+                self.axs[i, 1 + j].clabel(CS, inline=1, colors="black")
                 self.axs[i, 1 + j].set_title(
                     i_str + ": Fraction of positions leading to a " + j_str
                 )
                 self.normalized_axis(i, 1 + j)
 
-        # self.fig.colorbar(cp, ax=self.axs[:, -1], shrink=0.6)
+        self.fig.colorbar(cp, ax=self.axs[:, -1], shrink=0.6)
         self.fig.align_labels()
         self.save()
 
