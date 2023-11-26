@@ -172,6 +172,16 @@ class WdlData:
         self.d_density[self.mask] = self.draws[self.mask] / total[self.mask]
         self.l_density[self.mask] = self.losses[self.mask] / total[self.mask]
 
+    def get_wdl_columns(self, mom):
+        """return views of the three 2d density arrays for the given value of mom"""
+        mom_idx = mom - self.offset_mom  # recover the array index of mom
+        eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
+        row_idxs = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
+        w = self.wins[:, mom_idx][eval_mask]
+        d = self.draws[:, mom_idx][eval_mask]
+        l = self.losses[:, mom_idx][eval_mask]
+        return row_idxs, w, d, l
+
     def get_wdl_density_columns(self, mom):
         """return views of the three 2d density arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
@@ -390,6 +400,7 @@ class ObjectiveFunction:
     def scoreError(self, asbs: list[float]):
         """Sum of the squared error on the game score"""
         scoreErr = 0
+        totalCount = 0
 
         for d, score in [
             (self.win.items(), 1),
@@ -398,17 +409,20 @@ class ObjectiveFunction:
         ]:
             for (eval, mom), count in d:
                 scoreErr += count * (self.estimateScore(asbs, eval, mom) - score) ** 2
+                totalCount += count
 
-        return scoreErr
+        return np.sqrt(scoreErr / totalCount)
 
     def evalLogProbability(self, asbs: list[float]):
         """-log(product of game outcome probability)"""
         evalLogProb = 0
+        totalCount = 0        
 
         for (eval, mom), count in self.win.items():
             a, b = self.get_ab(asbs, mom)
             prob = win_rate(eval, a, b)
             evalLogProb += count * np.log(max(prob, 1e-14))
+            totalCount += count
 
         for (eval, mom), count in self.draw.items():
             a, b = self.get_ab(asbs, mom)
@@ -416,13 +430,15 @@ class ObjectiveFunction:
             probl = loss_rate(eval, a, b)
             prob = 1 - probw - probl
             evalLogProb += count * np.log(max(prob, 1e-14))
+            totalCount += count
 
         for (eval, mom), count in self.loss.items():
             a, b = self.get_ab(asbs, mom)
             prob = loss_rate(eval, a, b)
             evalLogProb += count * np.log(max(prob, 1e-14))
+            totalCount += count
 
-        return -evalLogProb
+        return -evalLogProb / totalCount
 
     def __call__(self, asbs):
         return 0 if self._objective_function is None else self._objective_function(asbs)
@@ -487,23 +503,26 @@ class ObjectiveFunction_numpy:
     def scoreError(self, asbs: list[float]):
         """Sum of the squared error on the game score"""
         scoreErr = 0
+        totalCount = 0
 
         for mom in self.moms:
-            evals, w, d, l = wdl_data.get_wdl_density_columns(mom)
+            evals, w, d, l = wdl_data.get_wdl_columns(mom)
             for a, score in [(w, 1), (d, 0.5), (l, 0)]:
                 for i in range(len(evals)):
                     count = a[i]
                     scoreErr += count * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
+                    totalCount += count
 
-        return scoreErr
+        return np.sqrt(scoreErr / totalCount)
 
     def evalLogProbability(self, asbs: list[float]):
         """-log(product of game outcome probability)"""
         evalLogProb = 0
+        totalCount = 0
 
         for mom in self.moms:
             a, b = self.get_ab(asbs, mom)
-            evals, w, d, l = wdl_data.get_wdl_density_columns(mom)
+            evals, w, d, l = wdl_data.get_wdl_columns(mom)
             for i in range(len(evals)):
                 probw = win_rate(evals[i], a, b)
                 probl = loss_rate(evals[i], a, b)
@@ -511,8 +530,9 @@ class ObjectiveFunction_numpy:
                 evalLogProb += w[i] * np.log(max(probw, 1e-14))
                 evalLogProb += d[i] * np.log(max(probd, 1e-14))
                 evalLogProb += l[i] * np.log(max(probl, 1e-14))
+                totalCount += w[i] + d[i] + l[i]
 
-        return -evalLogProb
+        return -evalLogProb / totalCount
 
     def __call__(self, asbs):
         return 0 if self._objective_function is None else self._objective_function(asbs)
