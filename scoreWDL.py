@@ -925,7 +925,7 @@ class WdlPlot_numpy:
                 label="fit: " + model.label_bs,
             )
 
-            self.axs[1, 0].set_xlabel(model.yData)
+            self.axs[1, 0].set_xlabel(wdl_data.yData)
             self.axs[1, 0].set_ylabel("parameters (in internal value units)")
             self.axs[1, 0].legend(fontsize="x-small")
             self.axs[1, 0].set_title("Winrate model parameters")
@@ -965,7 +965,7 @@ class WdlPlot_numpy:
                         model_wdl_rates(
                             np.asarray(model_data_density.xs),
                             np.asarray(model_data_density.ys),
-                            wdl_data.yDataTarget,
+                            model.yDataTarget,
                             model.coeffs_a,
                             model.coeffs_b,
                         )[j],
@@ -1137,7 +1137,7 @@ if __name__ == "__main__":
             if wdl_model:
                 # this shows the fit of the observed wdl data at mom=yDataTarget to
                 # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
-                fsum_a, fsum_b = sum(coeffs_a), sum(coeffs_b)
+                fsum_a, fsum_b = sum(wdl_model.coeffs_a), sum(wdl_model.coeffs_b)
                 wdl_plot.sample_wdl_curves(fsum_a, fsum_b)
 
             wdl_plot.contour_plots(wdl_data, wdl_model)
