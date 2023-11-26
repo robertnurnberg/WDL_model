@@ -62,6 +62,7 @@ class WdlData:
     def __init__(self, args, eval_max):
         self.yData = args.yData
         self.filenames = args.filename
+        self.yDataMax = args.yDataMax  # needed within WdlPlot
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
@@ -145,13 +146,13 @@ class WdlData:
             print("No data was found!")
             exit(0)
 
-        # define wdl densities: if total = 0, entries will be -1.0
+        # define wdl densities: if total = 0, entries will be NaN
         # TODO: try setting them to NaN instead
         total = self._wins + self._draws + self._losses
         self.mask = total > 0
-        self._w_density = -1.0 * np.ones_like(total)
-        self._d_density = -1.0 * np.ones_like(total)
-        self._l_density = -1.0 * np.ones_like(total)
+        self._w_density = np.full_like(total, np.NaN, dtype=float)
+        self._d_density = np.full_like(total, np.NaN, dtype=float)
+        self._l_density = np.full_like(total, np.NaN, dtype=float)
         self._w_density[self.mask] = self._wins[self.mask] / total[self.mask]
         self._d_density[self.mask] = self._draws[self.mask] / total[self.mask]
         self._l_density[self.mask] = self._losses[self.mask] / total[self.mask]
@@ -923,9 +924,8 @@ class WdlPlot_numpy:
         # now generate contour plots
         contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
 
-        ylabelStr = model.yData + " (1,3,3,5,9)" * bool(model.yData == "material")
-        ymin, ymax = self.yPlotMin, model.yDataMax
-        points = np.array(list(zip(model_data_density.xs, model_data_density.ys)))
+        ylabelStr = wdl_data.yData + " (1,3,3,5,9)" * bool(wdl_data.yData == "material")
+        ymin, ymax = self.yPlotMin, wdl_data.yDataMax
 
         for j, j_str in enumerate(["win", "draw"]):
             # for wins, plot between -1 and 3 pawns, for draws between -2 and 2 pawns
@@ -943,33 +943,19 @@ class WdlPlot_numpy:
                 )
                 self.axs[i, 1 + j].set_ylabel(ylabelStr)
 
-                zz: np.ndarray | list[float]
-                if i_str == "Data":
-                    zz = model_data_density.zdraws if j else model_data_density.zwins
-                else:
-                    zz = cast(
-                        np.ndarray,
-                        model_wdl_rates(
-                            np.asarray(model_data_density.xs),
-                            np.asarray(model_data_density.ys),
-                            self.yDataTarget,
-                            model.coeffs_a,
-                            model.coeffs_b,
-                        )[j],
-                    )
-                zz = griddata(points, zz, (grid_x, grid_y))
-                cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
+                # zz = griddata(points, zz, (grid_x, grid_y))
+                # cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
 
-                CS = self.axs[i, 1 + j].contour(
-                    grid_x, grid_y, zz, contourlines, colors="black"
-                )
-                self.axs[i, 1 + j].clabel(CS, inline=1, colors="black")
+                # CS = self.axs[i, 1 + j].contour(
+                #    grid_x, grid_y, zz, contourlines, colors="black"
+                # )
+                # self.axs[i, 1 + j].clabel(CS, inline=1, colors="black")
                 self.axs[i, 1 + j].set_title(
                     i_str + ": Fraction of positions leading to a " + j_str
                 )
                 self.normalized_axis(i, 1 + j)
 
-        self.fig.colorbar(cp, ax=self.axs[:, -1], shrink=0.6)
+        # self.fig.colorbar(cp, ax=self.axs[:, -1], shrink=0.6)
         self.fig.align_labels()
         self.save()
 
@@ -1120,14 +1106,14 @@ if __name__ == "__main__":
 
         if args.plot != "no":
             wdl_plot = WdlPlot_numpy(args, wdl_data.normalize_to_pawn_value)
-            wdl_plot.plot_wdl_densities(wdl_data, wdl_data.yDataTarget)
+            wdl_plot.sample_wdl_densities(wdl_data, args.yDataTarget)
             if wdl_model:
                 # this shows the fit of the observed wdl data at mom=yDataTarget to
                 # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
                 fsum_a, fsum_b = sum(coeffs_a), sum(coeffs_b)
-                wdl_plot.plot_wdl_curves(fsum_a, fsum_b)
+                wdl_plot.sample_wdl_curves(fsum_a, fsum_b)
 
-            wdl_plot.contour_plots(model_data_density, wdl_model)
+            wdl_plot.contour_plots(wdl_data, wdl_model)
 
     if args.plot != "save+show":
         print(f"Total elapsed time = {time.time() - tic:.2f}s.")
