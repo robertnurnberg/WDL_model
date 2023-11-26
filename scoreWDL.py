@@ -73,7 +73,8 @@ class WdlData:
     def __init__(self, args, eval_max):
         self.yData = args.yData
         self.filenames = args.filename
-        self.yDataMax = args.yDataMax  # needed within WdlPlot
+        self.yDataMin = args.yDataMin
+        self.yDataMax = args.yDataMax  
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
@@ -211,7 +212,9 @@ class WdlData:
         model_bs = np.empty_like(model_ms, dtype=float)
 
         for i in range(len(model_ms)):
-            xdata, ywindata, ydrawdata, ylossdata = self.get_wdl_density_columns(model_ms[i])
+            xdata, ywindata, ydrawdata, ylossdata = self.get_wdl_density_columns(
+                model_ms[i]
+            )
 
             # find a(mom) and b(mom) via a simple fit of win_rate() to the densities
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
@@ -220,11 +223,7 @@ class WdlData:
             # refine the local result based on data, optimizing an objective function
             if modelFitting != "fitDensity":
                 # minimize the objective function
-                objective_function = ObjectiveFunction(
-                    modelFitting,
-                    xdata, ywindata, ydrawdata, ylossdata,
-                    self.yDataTarget,
-                )
+                objective_function = ObjectiveFunction_numpy(modelFitting, self, [model_ms[i]])
                 popt_ab, _ = objective_function.minimize(popt_ab)
 
             model_as[i] = popt_ab[0]  # store a(mom)
@@ -440,6 +439,7 @@ class ObjectiveFunction:
         )
         return res.x, res.message
 
+
 class ObjectiveFunction_numpy:
     """Provides objective functions that can be minimized to fit the win draw loss data"""
 
@@ -447,8 +447,8 @@ class ObjectiveFunction_numpy:
         self,
         modelFitting: str,
         wdl_data: WdlData,
-        moms: list[int],
-        y_data_target: int,
+        moms: list[int] | None,
+        y_data_target: int = None,
     ):
         if modelFitting == "optimizeScore":
             # minimize the l2 error of the predicted score
@@ -459,7 +459,7 @@ class ObjectiveFunction_numpy:
         else:
             self._objective_function = None
         self.wdl_data = wdl_data
-        self.moms = moms
+        self.moms = range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if moms is None else moms
         self.y_data_target = y_data_target
 
     def get_ab(self, asbs: list[float], mom: int):
@@ -492,7 +492,8 @@ class ObjectiveFunction_numpy:
             evals, w, d, l = wdl_data.get_wdl_density_columns(mom)
             for a, score in [(w, 1), (d, 0.5), (l, 0)]:
                 for i in range(len(evals)):
-                    scoreErr += a[wdl_model.idx(eval, mom)] * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
+                    count = a[i]
+                    scoreErr += count * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
 
         return scoreErr
 
@@ -500,22 +501,16 @@ class ObjectiveFunction_numpy:
         """-log(product of game outcome probability)"""
         evalLogProb = 0
 
-        for (eval, mom), count in self.win.items():
+        for mom in self.moms:
             a, b = self.get_ab(asbs, mom)
-            prob = win_rate(eval, a, b)
-            evalLogProb += count * np.log(max(prob, 1e-14))
-
-        for (eval, mom), count in self.draw.items():
-            a, b = self.get_ab(asbs, mom)
-            probw = win_rate(eval, a, b)
-            probl = loss_rate(eval, a, b)
-            prob = 1 - probw - probl
-            evalLogProb += count * np.log(max(prob, 1e-14))
-
-        for (eval, mom), count in self.loss.items():
-            a, b = self.get_ab(asbs, mom)
-            prob = loss_rate(eval, a, b)
-            evalLogProb += count * np.log(max(prob, 1e-14))
+            evals, w, d, l = wdl_data.get_wdl_density_columns(mom)
+            for i in range(len(evals)):
+                probw = win_rate(evals[i], a, b)
+                probl = loss_rate(evals[i], a, b)
+                probd = 1 - probw - probl
+                evalLogProb += w[i] * np.log(max(probw, 1e-14))
+                evalLogProb += d[i] * np.log(max(probd, 1e-14))
+                evalLogProb += l[i] * np.log(max(probl, 1e-14))
 
         return -evalLogProb
 
@@ -907,7 +902,9 @@ class WdlModel_numpy:
         print(f"Fit WDL model based on {wdl_data.yData}.")
 
         # for each value of mom of interest, find good fits for a(mom) and b(mom)
-        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally(self.modelFitting)
+        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally(
+            self.modelFitting
+        )
 
         # now capture the functional behavior of a and b as functions of mom,
         # starting with a simple polynomial fit to find p_a and p_b
@@ -917,6 +914,20 @@ class WdlModel_numpy:
         self.coeffs_b, _ = curve_fit(
             poly3, self.model_ms / self.yDataTarget, self.model_bs
         )
+
+        # possibly refine p_a and p_b by optimizing a given objective function
+        if self.modelFitting != "fitDensity":
+            objective_function = ObjectiveFunction_numpy(
+                self.modelFitting, wdl_data, None, self.yDataTarget
+            )
+
+            popt_all = self.coeffs_a.tolist() + self.coeffs_b.tolist()
+            print("Initial objective function: ", objective_function(popt_all))
+            popt_all, message = objective_function.minimize(popt_all)
+            self.coeffs_a = popt_all[0:4]  # store final p_a
+            self.coeffs_b = popt_all[4:8]  # store final p_b
+            print("Final objective function:   ", objective_function(popt_all))
+            print(message)
 
         # prepare output
         self.label_as = "as = " + self.poly3_str(self.coeffs_a)
