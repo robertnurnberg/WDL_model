@@ -62,14 +62,13 @@ class WdlData:
     def __init__(self, args, eval_max):
         self.yData = args.yData
         self.filenames = args.filename
-        self.yDataMin = args.yDataMin
-        self.yDataMax = args.yDataMax
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
             self.NormalizeData["as"] = [float(x) for x in self.NormalizeData["as"]]
         self.normalize_to_pawn_value = (
-            args.NormalizeToPawnValue if self.NormalizeData is None
+            args.NormalizeToPawnValue
+            if self.NormalizeData is None
             else int(sum(self.NormalizeData["as"]))
         )
         print(
@@ -95,11 +94,9 @@ class WdlData:
         self.draws = np.zeros((dim_mom, dim_eval), dtype=int)
         self.losses = np.zeros((dim_mom, dim_eval), dtype=int)
 
-    def idx(self, mom, eval):
-        return mom - self.offset_mom, eval - self.offset_eval
-
     def add_to_wdl_counters(self, result, mom, eval, value):
-        mom_idx, eval_idx = self.idx(mom, eval)
+        """add value to the win/draw/loss counter in the appropriate array"""
+        mom_idx, eval_idx = mom - self.offset_mom, eval - self.offset_eval
         if result == "W":
             self.wins[mom_idx, eval_idx] += value
         elif result == "D":
@@ -242,10 +239,12 @@ class ObjectiveFunction:
             self._objective_function = self.evalLogProbability
         else:
             self._objective_function = None
-        self.wdl_data = wdl_data
-        # TODO: replace yDataMin with shape of wdl_data
         self.wins, self.draws, self.losses = [], [], []
-        for mom in range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if single_mom is None else [single_mom]:
+        for mom in (
+            np.arange(wdl_data.wins.shape[0]) + wdl_data.offset_mom
+            if single_mom is None
+            else [single_mom]
+        ):
             evals, w, d, l = wdl_data.get_wdl_counts(mom)
             # keep only nonzero values to speed up objective function evaluations
             # TODO: investigate using numpy views instead of zipped lists
@@ -286,9 +285,7 @@ class ObjectiveFunction:
             for mom, zipped in wdl:
                 a, b = self.get_ab(asbs, mom)
                 for eval, count in zipped:
-                    scoreErr += (
-                        count * (self.estimateScore(a, b, eval) - score) ** 2
-                    )
+                    scoreErr += count * (self.estimateScore(a, b, eval) - score) ** 2
                     totalCount += count
 
         return np.sqrt(scoreErr / totalCount)
@@ -529,10 +526,12 @@ class WdlPlot:
                 self.axs[i, 1 + j].set_ylabel(ylabelStr)
 
                 zz: np.ndarray | list[float]
-                if i_str == "Data": 
+                if i_str == "Data":
                     zz = zdraws if j else zwins
                 else:
-                    zz = model_wdl_rates(xs, ys, model.yDataTarget, model.coeffs_a, model.coeffs_b)[j]
+                    zz = model_wdl_rates(
+                        xs, ys, model.yDataTarget, model.coeffs_a, model.coeffs_b
+                    )[j]
                 zz = griddata(points, zz, (grid_x, grid_y))
                 cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
 
