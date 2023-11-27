@@ -35,7 +35,7 @@ def loss_rate(eval: int | np.ndarray, a, b):
     return win_rate(-eval, a, b)
 
 
-def poly3(x: float | np.ndarray, c_3, c_2, c_1, c_0) -> float:
+def poly3(x, c_3, c_2, c_1, c_0):
     """compute the value of a polynomial of 3rd order in a point x"""
     return ((c_3 * x + c_2) * x + c_1) * x + c_0
 
@@ -44,9 +44,9 @@ def model_wdl_rates(
     eval: int | np.ndarray,
     mom: int | np.ndarray,
     mom_target: int,
-    coeffs_a: list[float],
-    coeffs_b: list[float],
-) -> tuple[float, float, float]:
+    coeffs_a: np.ndarray,
+    coeffs_b: np.ndarray,
+):
     """our wdl model is based on win/loss rate with a and b polynomials in mom,
     where mom = move or material counter"""
     a = poly3(mom / mom_target, *coeffs_a)
@@ -56,16 +56,6 @@ def model_wdl_rates(
     return w, 1 - w - l, l
 
 
-@dataclass
-class ModelDataDensity:
-    """Count data converted to densities"""
-
-    xs: list[int]  # internal evals
-    ys: list[int]  # mom counters (mom = move or material)
-    zwins: list[float]  # corresponding win probabilities
-    zdraws: list[float]  # draw probabilities
-
-
 class WdlData:
     """stores the raw wdl data in three 2D numpy arrays"""
 
@@ -73,14 +63,13 @@ class WdlData:
         self.yData = args.yData
         self.filenames = args.filename
         self.yDataMin = args.yDataMin
-        self.yDataMax = args.yDataMax  
+        self.yDataMax = args.yDataMax
         self.NormalizeData = args.NormalizeData
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
             self.NormalizeData["as"] = [float(x) for x in self.NormalizeData["as"]]
         self.normalize_to_pawn_value = (
-            args.NormalizeToPawnValue
-            if self.NormalizeData is None
+            args.NormalizeToPawnValue if self.NormalizeData is None
             else int(sum(self.NormalizeData["as"]))
         )
         print(
@@ -93,32 +82,30 @@ class WdlData:
         )
 
         # numpy arrays have nonnegative indices, so save dims and offsets for later
-        # TODO: dim no need to keep
-        self.dim_mom = args.yDataMax - args.yDataMin + 1
+        dim_mom = args.yDataMax - args.yDataMin + 1
         self.offset_mom = args.yDataMin
         self.eval_max = round(eval_max * self.normalize_to_pawn_value / 100)
-        self.dim_eval = 2 * self.eval_max + 1
+        dim_eval = 2 * self.eval_max + 1
         self.offset_eval = -self.eval_max
 
         # set up three arrays, each counting positions with a given internal mom (move/material) and eval
-        # note that contour plots for 2D matrices show row indices on y-axis, hence mom is row index TODO
-        # TODO: investigate if sparse matrix data structure is faster overall
-        # TODO: check if fortran order is faster
-        self.wins = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
-        self.draws = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
-        self.losses = np.zeros((self.dim_eval, self.dim_mom), dtype=int)
+        # mom is row index, since plots of 2D matrices show rows as yData
+        # TODO: investigate if a sparse matrix data structure is faster overall
+        self.wins = np.zeros((dim_mom, dim_eval), dtype=int)
+        self.draws = np.zeros((dim_mom, dim_eval), dtype=int)
+        self.losses = np.zeros((dim_mom, dim_eval), dtype=int)
 
-    def idx(self, eval, mom):
-        return eval - self.offset_eval, mom - self.offset_mom
+    def idx(self, mom, eval):
+        return mom - self.offset_mom, eval - self.offset_eval
 
-    def add_to_wdl_counters(self, result, eval, mom, value):
-        eval_idx, mom_idx = self.idx(eval, mom)
+    def add_to_wdl_counters(self, result, mom, eval, value):
+        mom_idx, eval_idx = self.idx(mom, eval)
         if result == "W":
-            self.wins[eval_idx, mom_idx] += value
+            self.wins[mom_idx, eval_idx] += value
         elif result == "D":
-            self.draws[eval_idx, mom_idx] += value
+            self.draws[mom_idx, eval_idx] += value
         elif result == "L":
-            self.losses[eval_idx, mom_idx] += value
+            self.losses[mom_idx, eval_idx] += value
 
     def load_json_data(self, move_min, move_max):
         """load the WDL data from json: the keys describe the position (result, move, material, eval),
@@ -153,7 +140,7 @@ class WdlData:
                     eval_internal = round(eval * a_internal / 100)
 
                     if abs(eval_internal) <= self.eval_max:
-                        self.add_to_wdl_counters(result, eval_internal, mom, value)
+                        self.add_to_wdl_counters(result, mom, eval_internal, value)
 
         W, D, L = self.wins.sum(), self.draws.sum(), self.losses.sum()
         print(f"Retained (W,D,L) = ({W}, {D}, {L}) positions.")
@@ -172,58 +159,54 @@ class WdlData:
         self.d_density[self.mask] = self.draws[self.mask] / total[self.mask]
         self.l_density[self.mask] = self.losses[self.mask] / total[self.mask]
 
-    def get_wdl_columns(self, mom):
+    def get_wdl_counts(self, mom):
         """return views of the three 2d density arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
-        eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
-        row_idxs = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
-        w = self.wins[:, mom_idx][eval_mask]
-        d = self.draws[:, mom_idx][eval_mask]
-        l = self.losses[:, mom_idx][eval_mask]
-        return row_idxs, w, d, l
+        eval_mask = self.mask[mom_idx, :]  # find all the evals with wdl data
+        evals = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
+        w = self.wins[mom_idx, :][eval_mask]
+        d = self.draws[mom_idx, :][eval_mask]
+        l = self.losses[mom_idx, :][eval_mask]
+        return evals, w, d, l
 
-    def get_wdl_density_columns(self, mom):
+    def get_wdl_densities(self, mom):
         """return views of the three 2d density arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
-        eval_mask = self.mask[:, mom_idx]  # find all the evals with wdl data
-        row_idxs = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
-        w = self.w_density[:, mom_idx][eval_mask]
-        d = self.d_density[:, mom_idx][eval_mask]
-        l = self.l_density[:, mom_idx][eval_mask]
-        return row_idxs, w, d, l
+        eval_mask = self.mask[mom_idx, :]  # find all the evals with wdl data
+        evals = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
+        w = self.w_density[mom_idx, :][eval_mask]
+        d = self.d_density[mom_idx, :][eval_mask]
+        l = self.l_density[mom_idx, :][eval_mask]
+        return evals, w, d, l
 
-    def get_model_data_density(self) -> ModelDataDensity:
+    def get_model_data_density(self):  # TODO: remove once we plot 2D arrays directly
         """for backward compatibility, to allow easy contour plotting"""
-        # TODO: try to remove
         valid_data = np.where(self.mask)
-        xs, ys = valid_data[0] + self.offset_eval, valid_data[1] + self.offset_mom
+        xs, ys = valid_data[1] + self.offset_eval, valid_data[0] + self.offset_mom
         zwins = self.w_density[valid_data]
         zdraws = self.d_density[valid_data]
-        return ModelDataDensity(xs, ys, zwins, zdraws)
+        return xs, ys, zwins, zdraws
 
     def fit_abs_locally(self, modelFitting):
         """for each value of mom of interest, find a(mom) and b(mom) so that the induced
         1D win rate function best matches the observed win frequencies"""
 
         # filter mom values with less than 10 wins in total
-        total_wins = np.sum(self.wins, axis=0)
-        self.mom_mask = total_wins >= 10  # TODO: make cli parameter
-        if not np.all(self.mom_mask):
-            false_indices = np.where(~self.mom_mask)[0]
+        total_wins = np.sum(self.wins, axis=1)
+        mom_mask = total_wins >= 10  # TODO: make 10 a cli parameter
+        if not np.all(mom_mask):
             print(
                 f"Warning: Too little data, so skipping {self.yData} values",
-                np.where(~self.mom_mask)[0] + self.offset_mom,
+                np.where(~mom_mask)[0] + self.offset_mom,
             )
 
         # prepare the values of mom for which we will fit a and b locally
-        model_ms = np.where(self.mom_mask)[0] + self.offset_mom
+        model_ms = np.where(mom_mask)[0] + self.offset_mom
         model_as = np.empty_like(model_ms, dtype=float)
         model_bs = np.empty_like(model_ms, dtype=float)
 
         for i in range(len(model_ms)):
-            xdata, ywindata, ydrawdata, ylossdata = self.get_wdl_density_columns(
-                model_ms[i]
-            )
+            xdata, ywindata, _, _ = self.get_wdl_densities(model_ms[i])
 
             # find a(mom) and b(mom) via a simple fit of win_rate() to the densities
             popt_ab = self.normalize_to_pawn_value * np.array([1, 1 / 6])
@@ -232,7 +215,7 @@ class WdlData:
             # refine the local result based on data, optimizing an objective function
             if modelFitting != "fitDensity":
                 # minimize the objective function
-                objective_function = ObjectiveFunction(modelFitting, self, [model_ms[i]])
+                objective_function = ObjectiveFunction(modelFitting, self, model_ms[i])
                 popt_ab, _ = objective_function.minimize(popt_ab)
 
             model_as[i] = popt_ab[0]  # store a(mom)
@@ -248,8 +231,8 @@ class ObjectiveFunction:
         self,
         modelFitting: str,
         wdl_data: WdlData,
-        moms: list[int] | None,
-        y_data_target: int = None,
+        single_mom: int | None,
+        y_data_target: int | None = None,
     ):
         if modelFitting == "optimizeScore":
             # minimize the l2 error of the predicted score
@@ -260,7 +243,9 @@ class ObjectiveFunction:
         else:
             self._objective_function = None
         self.wdl_data = wdl_data
-        self.moms = range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if moms is None else moms
+        self.moms = (
+            range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if single_mom is None else [single_mom]
+        )
         self.y_data_target = y_data_target
 
     def get_ab(self, asbs: list[float], mom: int):
@@ -291,11 +276,13 @@ class ObjectiveFunction:
         totalCount = 0
 
         for mom in self.moms:
-            evals, w, d, l = wdl_data.get_wdl_columns(mom)
+            evals, w, d, l = wdl_data.get_wdl_counts(mom)
             for a, score in [(w, 1), (d, 0.5), (l, 0)]:
                 for i in range(len(evals)):
                     count = a[i]
-                    scoreErr += count * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
+                    scoreErr += (
+                        count * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
+                    )
                     totalCount += count
 
         return np.sqrt(scoreErr / totalCount)
@@ -307,7 +294,7 @@ class ObjectiveFunction:
 
         for mom in self.moms:
             a, b = self.get_ab(asbs, mom)
-            evals, w, d, l = wdl_data.get_wdl_columns(mom)
+            evals, w, d, l = wdl_data.get_wdl_counts(mom)
             for i in range(len(evals)):
                 probw = win_rate(evals[i], a, b)
                 probl = loss_rate(evals[i], a, b)
@@ -333,6 +320,7 @@ class ObjectiveFunction:
             options={"maxiter": 100000, "disp": False, "xtol": 1e-6},
         )
         return res.x, res.message
+
 
 class WdlModel:
     def __init__(self, args):
@@ -442,7 +430,7 @@ class WdlPlot:
 
     def sample_wdl_densities(self, wdl_data, mom):
         """plot wdl sample data at a fixed mom value"""
-        xdata, ywindata, ydrawdata, ylossdata = wdl_data.get_wdl_density_columns(mom)
+        xdata, ywindata, ydrawdata, ylossdata = wdl_data.get_wdl_densities(mom)
         self.axs[0, 0].plot(xdata, ywindata, "b.", label="Measured winrate")
         self.axs[0, 0].plot(xdata, ydrawdata, "g.", label="Measured drawrate")
         self.axs[0, 0].plot(xdata, ylossdata, "c.", label="Measured lossrate")
@@ -498,14 +486,14 @@ class WdlPlot:
             self.axs[1, 0].set_title("Winrate model parameters")
             self.axs[1, 0].set_ylim(bottom=0.0)
 
-        model_data_density = wdl_data.get_model_data_density()
+        xs, ys, zwins, zdraws = wdl_data.get_model_data_density()
 
         # now generate contour plots
         contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
 
         ylabelStr = wdl_data.yData + " (1,3,3,5,9)" * bool(wdl_data.yData == "material")
         ymin, ymax = self.yPlotMin, wdl_data.yDataMax
-        points = np.array(list(zip(model_data_density.xs, model_data_density.ys)))
+        points = np.array(list(zip(xs, ys)))
 
         for j, j_str in enumerate(["win", "draw"]):
             # for wins, plot between -1 and 3 pawns, for draws between -2 and 2 pawns
@@ -524,19 +512,10 @@ class WdlPlot:
                 self.axs[i, 1 + j].set_ylabel(ylabelStr)
 
                 zz: np.ndarray | list[float]
-                if i_str == "Data":
-                    zz = model_data_density.zdraws if j else model_data_density.zwins
+                if i_str == "Data": 
+                    zz = zdraws if j else zwins
                 else:
-                    zz = cast(
-                        np.ndarray,
-                        model_wdl_rates(
-                            np.asarray(model_data_density.xs),
-                            np.asarray(model_data_density.ys),
-                            model.yDataTarget,
-                            model.coeffs_a,
-                            model.coeffs_b,
-                        )[j],
-                    )
+                    zz = model_wdl_rates(xs, ys, model.yDataTarget, model.coeffs_a, model.coeffs_b)[j]
                 zz = griddata(points, zz, (grid_x, grid_y))
                 cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
 
@@ -640,11 +619,6 @@ if __name__ == "__main__":
         default="fitDensity",
         help="Choice of model fitting: Fit the win rate curves, maximimize the probability of predicting the outcome, minimize the squared error in predicted score, or no fitting.",
     )
-    parser.add_argument(
-        "--usenumpy",
-        action="store_true",
-    )
-
     args = parser.parse_args()
 
     if args.NormalizeToPawnValue is None:
@@ -667,47 +641,25 @@ if __name__ == "__main__":
 
     tic = time.time()
 
-    if not args.usenumpy:
-        data_loader = DataLoader(args)
+    wdl_data = WdlData(args, eval_max=400)  # TODO: make 400 a cli parameter
+    wdl_data.load_json_data(args.moveMin, args.moveMax)
 
-        win, draw, loss = data_loader.extract_wdl(
-            args.moveMin, args.moveMax, args.yData
-        )
-
-        if len(win) + len(draw) + len(loss) == 0:
-            print("No data was found!")
-            exit(0)
-
-        wdl_plot = WdlPlot(args, data_loader.normalize_to_pawn_value)
-
-        wdl_model = WdlModel(args, data_loader.normalize_to_pawn_value, wdl_plot)
-
-        model_data_density = data_loader.get_model_data_density(win, draw, loss)
-
-        model = wdl_model.fit_model(model_data_density, win, draw, loss)
-
-        if args.plot != "no":
-            wdl_plot.create_plots(model_data_density, model)
+    if args.modelFitting != "None":
+        wdl_model = WdlModel(args)
+        wdl_model.fit_ab_globally(wdl_data)
     else:
-        wdl_data = WdlData(args, eval_max=400)  # TODO: make cli parameter
-        wdl_data.load_json_data(args.moveMin, args.moveMax)
+        wdl_model = None
 
-        if args.modelFitting != "None":
-            wdl_model = WdlModel(args)
-            wdl_model.fit_ab_globally(wdl_data)
-        else:
-            wdl_model = None
+    if args.plot != "no":
+        wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
+        wdl_plot.sample_wdl_densities(wdl_data, args.yDataTarget)
+        if wdl_model:
+            # this shows the fit of the observed wdl data at mom=yDataTarget to
+            # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
+            fsum_a, fsum_b = sum(wdl_model.coeffs_a), sum(wdl_model.coeffs_b)
+            wdl_plot.sample_wdl_curves(fsum_a, fsum_b)
 
-        if args.plot != "no":
-            wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
-            wdl_plot.sample_wdl_densities(wdl_data, args.yDataTarget)
-            if wdl_model:
-                # this shows the fit of the observed wdl data at mom=yDataTarget to
-                # the model wdl rates with a=p_a(yDataTarget) and b=p_b(yDataTarget)
-                fsum_a, fsum_b = sum(wdl_model.coeffs_a), sum(wdl_model.coeffs_b)
-                wdl_plot.sample_wdl_curves(fsum_a, fsum_b)
-
-            wdl_plot.contour_plots(wdl_data, wdl_model)
+        wdl_plot.contour_plots(wdl_data, wdl_model)
 
     if args.plot != "save+show":
         print(f"Total elapsed time = {time.time() - tic:.2f}s.")
