@@ -1,10 +1,8 @@
 import argparse, json, matplotlib.pyplot as plt, numpy as np, time
 from ast import literal_eval
-from collections import Counter
-from dataclasses import dataclass
 from scipy.interpolate import griddata
 from scipy.optimize import curve_fit, minimize
-from typing import Literal, cast
+from typing import Literal
 
 
 def win_rate(eval: int | np.ndarray, a, b):
@@ -57,7 +55,7 @@ def model_wdl_rates(
 
 
 class WdlData:
-    """stores the raw wdl data in three 2D numpy arrays"""
+    """stores wdl raw data counts and densities in six 2D numpy arrays"""
 
     def __init__(self, args, eval_max):
         self.yData = args.yData
@@ -80,16 +78,16 @@ class WdlData:
             )
         )
 
-        # numpy arrays have nonnegative indices, so save dims and offsets for later
+        # numpy arrays have nonnegative indices, so the two offsets for later
         dim_mom = args.yDataMax - args.yDataMin + 1
         self.offset_mom = args.yDataMin
         self.eval_max = round(eval_max * self.normalize_to_pawn_value / 100)
         dim_eval = 2 * self.eval_max + 1
         self.offset_eval = -self.eval_max
 
-        # set up three arrays, each counting positions with a given internal mom (move/material) and eval
-        # mom is row index, since plots of 2D matrices show rows as yData
-        # TODO: investigate if a sparse matrix data structure is faster overall
+        # set up three arrays, each counting positions with a given mom (move/material) and internal eval
+        # here mom is the row index, since plots of 2D matrices show rows as yData
+        # TODO: investigate if a sparse matrix data structure in place of 2D array is faster overall
         self.wins = np.zeros((dim_mom, dim_eval), dtype=int)
         self.draws = np.zeros((dim_mom, dim_eval), dtype=int)
         self.losses = np.zeros((dim_mom, dim_eval), dtype=int)
@@ -146,7 +144,7 @@ class WdlData:
             print("No data was found!")
             exit(0)
 
-        # define wdl densities: if total = 0, entries will be NaN
+        # define wdl densities: if total = 0, entries will be NaN (useful for contour plots)
         total = self.wins + self.draws + self.losses
         self.mask = total > 0
         self.w_density = np.full_like(total, np.NaN, dtype=float)
@@ -157,7 +155,7 @@ class WdlData:
         self.l_density[self.mask] = self.losses[self.mask] / total[self.mask]
 
     def get_wdl_counts(self, mom):
-        """return views of the three 2d density arrays for the given value of mom"""
+        """return views of the three 2D raw count arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
         eval_mask = self.mask[mom_idx, :]  # find all the evals with wdl data
         evals = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
@@ -167,7 +165,7 @@ class WdlData:
         return evals, w, d, l
 
     def get_wdl_densities(self, mom):
-        """return views of the three 2d density arrays for the given value of mom"""
+        """return views of the three 2D density arrays for the given value of mom"""
         mom_idx = mom - self.offset_mom  # recover the array index of mom
         eval_mask = self.mask[mom_idx, :]  # find all the evals with wdl data
         evals = np.where(eval_mask)[0] + self.offset_eval  # recover eval values
@@ -177,7 +175,7 @@ class WdlData:
         return evals, w, d, l
 
     def get_model_data_density(self):  # TODO: remove once we plot 2D arrays directly
-        """for backward compatibility, to allow easy contour plotting"""
+        """for backward compatibility, to use existing contour plotting code"""
         valid_data = np.where(self.mask)
         xs, ys = valid_data[1] + self.offset_eval, valid_data[0] + self.offset_mom
         zwins = self.w_density[valid_data]
@@ -188,7 +186,7 @@ class WdlData:
         """for each value of mom of interest, find a(mom) and b(mom) so that the induced
         1D win rate function best matches the observed win frequencies"""
 
-        # filter mom values with less than 10 wins in total
+        # first filter mom values with less than 10 wins in total
         total_wins = np.sum(self.wins, axis=1)
         mom_mask = total_wins >= 10  # TODO: make 10 a cli parameter
         if not np.all(mom_mask):
@@ -197,10 +195,10 @@ class WdlData:
                 np.where(~mom_mask)[0] + self.offset_mom,
             )
 
-        # prepare the values of mom for which we will fit a and b locally
-        model_ms = np.where(mom_mask)[0] + self.offset_mom
-        model_as = np.empty_like(model_ms, dtype=float)
-        model_bs = np.empty_like(model_ms, dtype=float)
+        # prepare an array for the values of mom for which we will fit a and b
+        model_ms = np.where(mom_mask)[0] + self.offset_mom  # will store mom
+        model_as = np.empty_like(model_ms, dtype=float)  # will store a(mom)
+        model_bs = np.empty_like(model_ms, dtype=float)  # will store b(mom)
 
         for i in range(len(model_ms)):
             xdata, ywindata, _, _ = self.get_wdl_densities(model_ms[i])
@@ -222,7 +220,7 @@ class WdlData:
 
 
 class ObjectiveFunction:
-    """Provides objective functions that can be minimized to fit the win draw loss data"""
+    """provides objective functions that can be minimized to fit the win draw loss data"""
 
     def __init__(
         self,
@@ -269,7 +267,7 @@ class ObjectiveFunction:
         return a, b
 
     def estimateScore(self, a: float, b: float, eval: int):
-        """Estimate game score based on probability of WDL"""
+        """estimate game score based on probability of WDL"""
 
         probw = win_rate(eval, a, b)
         probl = loss_rate(eval, a, b)
@@ -277,7 +275,7 @@ class ObjectiveFunction:
         return probw + 0.5 * probd + 0
 
     def scoreError(self, asbs: list[float]):
-        """Sum of the squared error on the game score"""
+        """sum of the squared error on the game score"""
         scoreErr = 0
         totalCount = 0
 
