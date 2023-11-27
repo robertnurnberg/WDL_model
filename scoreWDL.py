@@ -248,9 +248,8 @@ class ObjectiveFunction:
         for mom in range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if single_mom is None else [single_mom]:
             evals, w, d, l = wdl_data.get_wdl_counts(mom)
             # keep only nonzero values to speed up objective function evaluations
-            w_mask = w > 0
-            d_mask = d > 0
-            l_mask = l > 0
+            # TODO: investigate using numpy views instead of zipped lists
+            w_mask, d_mask, l_mask = w > 0, d > 0, l > 0
             self.wins.append((mom, list(zip(evals[w_mask], w[w_mask]))))
             self.draws.append((mom, list(zip(evals[d_mask], d[d_mask]))))
             self.losses.append((mom, list(zip(evals[l_mask], l[l_mask]))))
@@ -270,10 +269,9 @@ class ObjectiveFunction:
 
         return a, b
 
-    def estimateScore(self, asbs: list[float], eval: int, mom: int):
+    def estimateScore(self, a: float, b: float, eval: int):
         """Estimate game score based on probability of WDL"""
 
-        a, b = self.get_ab(asbs, mom)
         probw = win_rate(eval, a, b)
         probl = loss_rate(eval, a, b)
         probd = 1 - probw - probl
@@ -286,9 +284,10 @@ class ObjectiveFunction:
 
         for wdl, score in [(self.wins, 1), (self.draws, 0.5), (self.losses, 0)]:
             for mom, zipped in wdl:
+                a, b = self.get_ab(asbs, mom)
                 for eval, count in zipped:
                     scoreErr += (
-                        count * (self.estimateScore(asbs, eval, mom) - score) ** 2
+                        count * (self.estimateScore(a, b, eval) - score) ** 2
                     )
                     totalCount += count
 
