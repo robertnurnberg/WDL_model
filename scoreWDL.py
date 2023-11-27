@@ -237,6 +237,7 @@ class ObjectiveFunction:
             self._objective_function = self.evalLogProbability
         else:
             self._objective_function = None
+        self.y_data_target = y_data_target
         self.wins, self.draws, self.losses = [], [], []
         for mom in (
             np.arange(wdl_data.wins.shape[0]) + wdl_data.offset_mom
@@ -251,10 +252,8 @@ class ObjectiveFunction:
             self.draws.append((mom, list(zip(evals[d_mask], d[d_mask]))))
             self.losses.append((mom, list(zip(evals[l_mask], l[l_mask]))))
 
-        self.y_data_target = y_data_target
-
     def get_ab(self, asbs: list[float], mom: int):
-        # returns p_a(mom), p_b(mom) or a(mom), b(mom) depending on optimization stage
+        """return p_a(mom), p_b(mom) or a(mom), b(mom) depending on optimization stage"""
         if len(asbs) == 8:
             coeffs_a = asbs[0:4]
             coeffs_b = asbs[4:8]
@@ -410,12 +409,9 @@ class WdlModel:
 class WdlPlot:
     def __init__(self, args, normalize_to_pawn_value: int):
         self.setting = args.plot
-        if self.setting == "no":
-            return
-
         self.pgnName = args.pgnName
-        self.normalize_to_pawn_value = normalize_to_pawn_value
         self.yPlotMin = args.yPlotMin
+        self.normalize_to_pawn_value = normalize_to_pawn_value
 
         self.fig, self.axs = plt.subplots(  # set figure size to A4 x 1.5
             2, 3, figsize=(11.69 * 1.5, 8.27 * 1.5), constrained_layout=True
@@ -472,11 +468,9 @@ class WdlPlot:
         )
 
     def contour_plots(self, wdl_data: WdlData, model: WdlModel):
-        print("Preparing contour plots.")
-
         plot_fitted_model = model is not None
         if plot_fitted_model:
-            # graphs of a and b as a function of move/material
+            # graphs of a and b as a function of mom (move/material)
             self.axs[1, 0].plot(model.model_ms, model.model_as, "b.", label="as")
             self.axs[1, 0].plot(
                 model.model_ms,
@@ -498,13 +492,14 @@ class WdlPlot:
             self.axs[1, 0].set_title("Winrate model parameters")
             self.axs[1, 0].set_ylim(bottom=0.0)
 
+        # use old way to create contour plots TODO: plot 2D arrays
         xs, ys, zwins, zdraws = wdl_data.get_model_data_density()
 
         # now generate contour plots
         contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
 
         ylabelStr = wdl_data.yData + " (1,3,3,5,9)" * bool(wdl_data.yData == "material")
-        ymin, ymax = self.yPlotMin, wdl_data.yDataMax
+        ymin, ymax = self.yPlotMin, wdl_data.wins.shape[0] + wdl_data.offset_mom
         points = np.array(list(zip(xs, ys)))
 
         for j, j_str in enumerate(["win", "draw"]):
@@ -523,7 +518,6 @@ class WdlPlot:
                 )
                 self.axs[i, 1 + j].set_ylabel(ylabelStr)
 
-                zz: np.ndarray | list[float]
                 if i_str == "Data":
                     zz = zdraws if j else zwins
                 else:
@@ -665,6 +659,7 @@ if __name__ == "__main__":
         wdl_model = None
 
     if args.plot != "no":
+        print("Preparing plots.")
         wdl_plot = WdlPlot(args, wdl_data.normalize_to_pawn_value)
         wdl_plot.sample_wdl_densities(wdl_data, args.yDataTarget)
         if wdl_model:
