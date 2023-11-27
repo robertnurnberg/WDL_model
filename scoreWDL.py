@@ -243,9 +243,18 @@ class ObjectiveFunction:
         else:
             self._objective_function = None
         self.wdl_data = wdl_data
-        self.moms = (
-            range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if single_mom is None else [single_mom]
-        )
+        # TODO: replace yDataMin with shape of wdl_data
+        self.wins, self.draws, self.losses = [], [], []
+        for mom in range(wdl_data.yDataMin, wdl_data.yDataMax + 1) if single_mom is None else [single_mom]:
+            evals, w, d, l = wdl_data.get_wdl_counts(mom)
+            # keep only nonzero values to speed up objective function evaluations
+            w_mask = w > 0
+            d_mask = d > 0
+            l_mask = l > 0
+            self.wins.append((mom, list(zip(evals[w_mask], w[w_mask]))))
+            self.draws.append((mom, list(zip(evals[d_mask], d[d_mask]))))
+            self.losses.append((mom, list(zip(evals[l_mask], l[l_mask]))))
+
         self.y_data_target = y_data_target
 
     def get_ab(self, asbs: list[float], mom: int):
@@ -275,13 +284,11 @@ class ObjectiveFunction:
         scoreErr = 0
         totalCount = 0
 
-        for mom in self.moms:
-            evals, w, d, l = wdl_data.get_wdl_counts(mom)
-            for a, score in [(w, 1), (d, 0.5), (l, 0)]:
-                for i in range(len(evals)):
-                    count = a[i]
+        for wdl, score in [(self.wins, 1), (self.draws, 0.5), (self.losses, 0)]:
+            for mom, zipped in wdl:
+                for eval, count in zipped:
                     scoreErr += (
-                        count * (self.estimateScore(asbs, evals[i], mom) - score) ** 2
+                        count * (self.estimateScore(asbs, eval, mom) - score) ** 2
                     )
                     totalCount += count
 
@@ -292,17 +299,28 @@ class ObjectiveFunction:
         evalLogProb = 0
         totalCount = 0
 
-        for mom in self.moms:
+        for mom, zipped in self.wins:
             a, b = self.get_ab(asbs, mom)
-            evals, w, d, l = wdl_data.get_wdl_counts(mom)
-            for i in range(len(evals)):
-                probw = win_rate(evals[i], a, b)
-                probl = loss_rate(evals[i], a, b)
+            for eval, count in zipped:
+                probw = win_rate(eval, a, b)
+                evalLogProb += count * np.log(max(probw, 1e-14))
+                totalCount += count
+
+        for mom, zipped in self.draws:
+            a, b = self.get_ab(asbs, mom)
+            for eval, count in zipped:
+                probw = win_rate(eval, a, b)
+                probl = loss_rate(eval, a, b)
                 probd = 1 - probw - probl
-                evalLogProb += w[i] * np.log(max(probw, 1e-14))
-                evalLogProb += d[i] * np.log(max(probd, 1e-14))
-                evalLogProb += l[i] * np.log(max(probl, 1e-14))
-                totalCount += w[i] + d[i] + l[i]
+                evalLogProb += count * np.log(max(probd, 1e-14))
+                totalCount += count
+
+        for mom, zipped in self.losses:
+            a, b = self.get_ab(asbs, mom)
+            for eval, count in zipped:
+                probl = loss_rate(eval, a, b)
+                evalLogProb += count * np.log(max(probl, 1e-14))
+                totalCount += count
 
         return -evalLogProb / totalCount
 
