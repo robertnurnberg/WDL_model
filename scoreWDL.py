@@ -246,7 +246,7 @@ class ObjectiveFunction:
         ):
             evals, w, d, l = wdl_data.get_wdl_counts(mom)
             # keep only nonzero values to speed up objective function evaluations
-            # TODO: investigate using numpy views instead of zipped lists
+            # TODO: investigate using numpy views or sparse matrices instead of zipped lists
             w_mask, d_mask, l_mask = w > 0, d > 0, l > 0
             self.wins.append((mom, list(zip(evals[w_mask], w[w_mask]))))
             self.draws.append((mom, list(zip(evals[d_mask], d[d_mask]))))
@@ -493,7 +493,7 @@ class WdlPlot:
         contourlines = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.97, 1.0]
 
         ylabelStr = wdl_data.yData + " (1,3,3,5,9)" * bool(wdl_data.yData == "material")
-        ymin, ymax = self.yPlotMin, wdl_data.wins.shape[0] + wdl_data.offset_mom
+        ymin, ymax = self.yPlotMin, wdl_data.wins.shape[0] + wdl_data.offset_mom - 1
         points = np.array(list(zip(xs, ys)))
 
         for j, j_str in enumerate(["win", "draw"]):
