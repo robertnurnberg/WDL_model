@@ -239,12 +239,14 @@ class ObjectiveFunction:
             self._objective_function = None
         self.y_data_target = y_data_target
         self.wins, self.draws, self.losses = [], [], []
+        self.total_count = 0
         for mom in (
             np.arange(wdl_data.wins.shape[0]) + wdl_data.offset_mom
             if single_mom is None
             else [single_mom]
         ):
             evals, w, d, l = wdl_data.get_wdl_counts(mom)
+            self.total_count += w.sum() + d.sum() + l.sum()
             # keep only nonzero values to speed up objective function evaluations
             # TODO: investigate using numpy views or sparse matrices instead of zipped lists
             w_mask, d_mask, l_mask = w > 0, d > 0, l > 0
@@ -276,28 +278,24 @@ class ObjectiveFunction:
     def scoreError(self, asbs: list[float]):
         """sum of the squared error on the game score"""
         scoreErr = 0
-        totalCount = 0
 
         for wdl, score in [(self.wins, 1), (self.draws, 0.5), (self.losses, 0)]:
             for mom, zipped in wdl:
                 a, b = self.get_ab(asbs, mom)
                 for eval, count in zipped:
                     scoreErr += count * (self.estimateScore(a, b, eval) - score) ** 2
-                    totalCount += count
 
-        return np.sqrt(scoreErr / totalCount)
+        return np.sqrt(scoreErr / self.total_count)
 
     def evalLogProbability(self, asbs: list[float]):
         """-log(product of game outcome probability)"""
         evalLogProb = 0
-        totalCount = 0
 
         for mom, zipped in self.wins:
             a, b = self.get_ab(asbs, mom)
             for eval, count in zipped:
                 probw = win_rate(eval, a, b)
                 evalLogProb += count * np.log(max(probw, 1e-14))
-                totalCount += count
 
         for mom, zipped in self.draws:
             a, b = self.get_ab(asbs, mom)
@@ -306,16 +304,14 @@ class ObjectiveFunction:
                 probl = loss_rate(eval, a, b)
                 probd = 1 - probw - probl
                 evalLogProb += count * np.log(max(probd, 1e-14))
-                totalCount += count
 
         for mom, zipped in self.losses:
             a, b = self.get_ab(asbs, mom)
             for eval, count in zipped:
                 probl = loss_rate(eval, a, b)
                 evalLogProb += count * np.log(max(probl, 1e-14))
-                totalCount += count
 
-        return -evalLogProb / totalCount
+        return -evalLogProb / self.total_count
 
     def __call__(self, asbs):
         return 0 if self._objective_function is None else self._objective_function(asbs)
