@@ -144,7 +144,7 @@ class WdlData:
             print("No data was found!")
             exit(0)
 
-        # define wdl densities: if total = 0, entries will be NaN (useful for contour plots)
+        # define wdl densities: if total == 0, entries will be NaN (useful for contour plots)
         total = self.wins + self.draws + self.losses
         self.mask = total > 0
         self.w_density = np.full_like(total, np.NaN, dtype=float)
