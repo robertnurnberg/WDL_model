@@ -394,7 +394,7 @@ class WdlPlot:
     def __init__(self, args, normalize_to_pawn_value: int):
         self.setting = args.plot
         self.pgnName = args.pgnName
-        self.yPlotMin = args.yPlotMin
+        self.yPlotMin = args.yPlotMin  # TODO: make yPlotMax a cli parameter
         self.normalize_to_pawn_value = normalize_to_pawn_value
 
         self.fig, self.axs = plt.subplots(  # set figure size to A4 x 1.5
@@ -452,9 +452,8 @@ class WdlPlot:
         )
 
     def poly3_and_contour_plots(self, wdl_data: WdlData, model: WdlModel):
-        """plot p_a, p_b against mom, as well as two contour plots each of wdl_data and model"""
+        """plots p_a, p_b against mom, and adds two contour plots each of wdl_data and model"""
         if model is not None:
-            # graphs of a and b as a function of mom (move/material)
             self.axs[1, 0].plot(model.ms, model._as, "b.", label="as")
             self.axs[1, 0].plot(
                 model.ms,
