@@ -227,7 +227,7 @@ class ObjectiveFunction:
         modelFitting: str,
         wdl_data: WdlData,
         single_mom: int | None,
-        y_data_target: int | None = None,
+        y_data_target: int = 0,
     ):
         if modelFitting == "optimizeScore":
             # minimize the l2 error of the predicted score
