@@ -458,8 +458,7 @@ class WdlPlot:
         )
 
     def contour_plots(self, wdl_data: WdlData, model: WdlModel):
-        plot_fitted_model = model is not None
-        if plot_fitted_model:
+        if model is not None:
             # graphs of a and b as a function of mom (move/material)
             self.axs[1, 0].plot(model.ms, model._as, "b.", label="as")
             self.axs[1, 0].plot(
@@ -499,7 +498,7 @@ class WdlPlot:
             grid_x, grid_y = np.mgrid[xmin:xmax:30j, ymin:ymax:22j]  # use a 30x22 grid
 
             for i, i_str in enumerate(
-                ["Data", "Model"] if plot_fitted_model else ["Data"]
+                ["Data", "Model"] if model is not None else ["Data"]
             ):
                 self.axs[i, 1 + j].yaxis.grid(True)
                 self.axs[i, 1 + j].xaxis.grid(True)
