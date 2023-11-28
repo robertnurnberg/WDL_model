@@ -233,7 +233,7 @@ class ObjectiveFunction:
             evals, w, d, l = wdl_data.get_wdl_counts(mom)
             self.total_count += w.sum() + d.sum() + l.sum()
             # keep only nonzero values to speed up objective function evaluations
-            # TODO: check if numpy views or sparse matrices instead of zipped lists is faster
+            # TODO: check if numpy views or sparse matrices instead of zipped lists are faster
             w_mask, d_mask, l_mask = w > 0, d > 0, l > 0
             self.wins.append((mom, list(zip(evals[w_mask], w[w_mask]))))
             self.draws.append((mom, list(zip(evals[d_mask], d[d_mask]))))
@@ -252,7 +252,7 @@ class ObjectiveFunction:
 
         return a, b
 
-    def estimateScore(self, a: float, b: float, eval: int):
+    def estimateScore(self, eval: int, a: float, b: float):
         """estimate game score based on probability of WDL"""
 
         probw = win_rate(eval, a, b)
@@ -268,7 +268,7 @@ class ObjectiveFunction:
             for mom, zipped in wdl:
                 a, b = self.get_ab(asbs, mom)
                 for eval, count in zipped:
-                    scoreErr += count * (self.estimateScore(a, b, eval) - score) ** 2
+                    scoreErr += count * (self.estimateScore(eval, a, b) - score) ** 2
 
         return np.sqrt(scoreErr / self.total_count)
 
@@ -362,8 +362,8 @@ class WdlModel:
             print(message)
 
         # prepare output
-        self.label_as = "as = " + self.poly3_str(self.coeffs_a)
-        self.label_bs = "bs = " + self.poly3_str(self.coeffs_b)
+        self.label_p_a = "p_a = " + self.poly3_str(self.coeffs_a)
+        self.label_p_b = "p_b = " + self.poly3_str(self.coeffs_b)
 
         # now we can report the new conversion factor p_a from internal eval to centipawn
         # such that an expected win score of 50% is for an internal eval of p_a(mom)
@@ -379,7 +379,7 @@ class WdlModel:
         )
 
         print("Parameters in internal value units: ")
-        print(self.label_as + "\n" + self.label_bs)
+        print(self.label_p_a + "\n" + self.label_p_b)
         print(
             "     constexpr double as[] = {%13.8f, %13.8f, %13.8f, %13.8f};"
             % tuple(self.coeffs_a)
@@ -451,7 +451,8 @@ class WdlPlot:
             "Comparison of model and m" + self.axs[0, 0].title.get_text()[1:]
         )
 
-    def contour_plots(self, wdl_data: WdlData, model: WdlModel):
+    def poly3_and_contour_plots(self, wdl_data: WdlData, model: WdlModel):
+        """plot p_a, p_b against mom, as well as two contour plots each of wdl_data and model"""
         if model is not None:
             # graphs of a and b as a function of mom (move/material)
             self.axs[1, 0].plot(model.ms, model._as, "b.", label="as")
@@ -459,14 +460,14 @@ class WdlPlot:
                 model.ms,
                 poly3(model.ms / model.yDataTarget, *model.coeffs_a),
                 "r-",
-                label="fit: " + model.label_as,
+                label="fit: " + model.label_p_a,
             )
             self.axs[1, 0].plot(model.ms, model.bs, "g.", label="bs")
             self.axs[1, 0].plot(
                 model.ms,
                 poly3(model.ms / model.yDataTarget, *model.coeffs_b),
                 "m-",
-                label="fit: " + model.label_bs,
+                label="fit: " + model.label_p_b,
             )
 
             self.axs[1, 0].set_xlabel(wdl_data.yData)
@@ -475,7 +476,7 @@ class WdlPlot:
             self.axs[1, 0].set_title("Winrate model parameters")
             self.axs[1, 0].set_ylim(bottom=0.0)
 
-        # use legacy way to create contour plots TODO: plot 2D arrays
+        # use legacy way to create contour plots TODO: directly plot 2D arrays
         xs, ys, zwins, zdraws = wdl_data.get_model_data_density()
 
         # now generate contour plots
@@ -651,7 +652,7 @@ if __name__ == "__main__":
             fsum_a, fsum_b = sum(wdl_model.coeffs_a), sum(wdl_model.coeffs_b)
             wdl_plot.sample_wdl_curves(fsum_a, fsum_b)
 
-        wdl_plot.contour_plots(wdl_data, wdl_model)
+        wdl_plot.poly3_and_contour_plots(wdl_data, wdl_model)
 
     if args.plot != "save+show":
         print(f"Total elapsed time = {time.time() - tic:.2f}s.")
