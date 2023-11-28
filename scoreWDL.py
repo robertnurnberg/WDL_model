@@ -350,18 +350,12 @@ class WdlModel:
         print(f"Fit WDL model based on {wdl_data.yData}.")
 
         # for each value of mom of interest, find good fits for a(mom) and b(mom)
-        self.model_ms, self.model_as, self.model_bs = wdl_data.fit_abs_locally(
-            self.modelFitting
-        )
+        self.ms, self._as, self.bs = wdl_data.fit_abs_locally(self.modelFitting)
 
         # now capture the functional behavior of a and b as functions of mom,
         # starting with a simple polynomial fit to find p_a and p_b
-        self.coeffs_a, _ = curve_fit(
-            poly3, self.model_ms / self.yDataTarget, self.model_as
-        )
-        self.coeffs_b, _ = curve_fit(
-            poly3, self.model_ms / self.yDataTarget, self.model_bs
-        )
+        self.coeffs_a, _ = curve_fit(poly3, self.ms / self.yDataTarget, self._as)
+        self.coeffs_b, _ = curve_fit(poly3, self.ms / self.yDataTarget, self.bs)
 
         # possibly refine p_a and p_b by optimizing a given objective function
         if self.modelFitting != "fitDensity":
@@ -471,17 +465,17 @@ class WdlPlot:
         plot_fitted_model = model is not None
         if plot_fitted_model:
             # graphs of a and b as a function of mom (move/material)
-            self.axs[1, 0].plot(model.model_ms, model.model_as, "b.", label="as")
+            self.axs[1, 0].plot(model.ms, model._as, "b.", label="as")
             self.axs[1, 0].plot(
-                model.model_ms,
-                poly3(model.model_ms / model.yDataTarget, *model.coeffs_a),
+                model.ms,
+                poly3(model.ms / model.yDataTarget, *model.coeffs_a),
                 "r-",
                 label="fit: " + model.label_as,
             )
-            self.axs[1, 0].plot(model.model_ms, model.model_bs, "g.", label="bs")
+            self.axs[1, 0].plot(model.ms, model.bs, "g.", label="bs")
             self.axs[1, 0].plot(
-                model.model_ms,
-                poly3(model.model_ms / model.yDataTarget, *model.coeffs_b),
+                model.ms,
+                poly3(model.ms / model.yDataTarget, *model.coeffs_b),
                 "m-",
                 label="fit: " + model.label_bs,
             )
