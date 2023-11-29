@@ -459,14 +459,14 @@ class WdlPlot:
                 model.ms,
                 poly3(model.ms / model.yDataTarget, *model.coeffs_a),
                 "r-",
-                label="fit: " + model.label_p_a,
+                label=model.label_p_a,
             )
             self.axs[1, 0].plot(model.ms, model.bs, "g.", label="bs")
             self.axs[1, 0].plot(
                 model.ms,
                 poly3(model.ms / model.yDataTarget, *model.coeffs_b),
                 "m-",
-                label="fit: " + model.label_p_b,
+                label=model.label_p_b,
             )
 
             self.axs[1, 0].set_xlabel(wdl_data.yData)
