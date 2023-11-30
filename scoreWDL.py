@@ -48,11 +48,10 @@ class WdlData:
         if self.NormalizeData is not None:
             self.NormalizeData = json.loads(self.NormalizeData)
             self.NormalizeData["as"] = [float(x) for x in self.NormalizeData["as"]]
-        self.normalize_to_pawn_value = (
-            args.NormalizeToPawnValue
-            if self.NormalizeData is None
-            else int(sum(self.NormalizeData["as"]))
-        )
+            self.normalize_to_pawn_value = int(sum(self.NormalizeData["as"]))
+        else:
+            self.normalize_to_pawn_value = args.NormalizeToPawnValue
+
         print(
             "Converting evals with "
             + (
