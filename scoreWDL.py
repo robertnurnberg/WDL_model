@@ -504,9 +504,7 @@ class WdlPlot:
                 if i_str == "Data":
                     zz = zdraws if j else zwins
                 else:
-                    zz = model_wdl_rates(
-                        xs, ys, model.yDataTarget, model.coeffs_a, model.coeffs_b
-                    )[j]
+                    zz = model.wdl_rates(xs, ys)[j]
                 zz = griddata(points, zz, (grid_x, grid_y))
                 cp = self.axs[i, 1 + j].contourf(grid_x, grid_y, zz, contourlines)
 
