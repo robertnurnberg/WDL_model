@@ -220,30 +220,46 @@ class WdlData:
         return model_ms, model_as, model_bs
 
     def save_distro_plot(self, pngNameDistro):
-        total_wins = np.sum(self.wins, axis=1)
-        total_draws = np.sum(self.draws, axis=1)
-        total_losses = np.sum(self.losses, axis=1)
+        fig, axs = plt.subplots(2, 1)
+        fig.suptitle("Distributions of Wins, Draws, and Losses")
+        xlabel = [self.momType, "internal eval"]
+        offset = [wdl_data.offset_mom, wdl_data.offset_eval]
+        for i in [0, 1]:
+            axis = (i + 1) % 2
+            total_wins = np.sum(self.wins, axis=axis)
+            total_draws = np.sum(self.draws, axis=axis)
+            total_losses = np.sum(self.losses, axis=axis)
 
-        index = np.arange(self.wins.shape[0]) + wdl_data.offset_mom
+            index = np.arange(self.wins.shape[i]) + offset[i]
 
-        plt.bar(index, total_wins, label="Wins", color="blue")
-        plt.bar(
-            index, total_draws, bottom=total_wins, label="Draws", color="lightgreen"
-        )
-        plt.bar(
-            index,
-            total_losses,
-            bottom=total_wins + total_draws,
-            label="Losses",
-            color="red",
-        )
+            if i == 0:
+                axs[i].bar(index, total_wins, label="Wins", color="blue")
+                axs[i].bar(
+                    index,
+                    total_draws,
+                    bottom=total_wins,
+                    label="Draws",
+                    color="lightgreen",
+                )
+                axs[i].bar(
+                    index,
+                    total_losses,
+                    bottom=total_wins + total_draws,
+                    label="Losses",
+                    color="red",
+                )
+            else:
+                axs[i].scatter(index, total_wins, color="blue", s=1)
+                axs[i].scatter(index, total_draws, color="lightgreen", s=1)
+                axs[i].scatter(index, total_losses, color="red", s=1)
 
-        plt.xlabel(self.momType)
-        plt.ylabel("Number of Games")
-        plt.title("Distribution of Wins, Draws, and Losses")
-        plt.legend()
-        plt.savefig(pngNameDistro)
-        plt.close()
+            axs[i].set_xlabel(xlabel[i])
+            axs[i].set_ylabel("Number of Games")
+            if i == 0:
+                axs[i].legend()
+            else:
+                axs[i].set_yscale("log")
+        fig.savefig(pngNameDistro, dpi=300)
         print(f"Saved distribution plot to {pngNameDistro}.")
 
 
@@ -564,10 +580,9 @@ class WdlPlot:
         self.save()
 
     def save(self):
-        plt.savefig(self.pngName, dpi=300)
+        self.fig.savefig(self.pngName, dpi=300)
         if self.setting == "save+show":
-            plt.show()
-        plt.close()
+            self.fig.show()
         print(f"Saved graphics to {self.pngName}.")
 
 
