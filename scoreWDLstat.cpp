@@ -89,6 +89,7 @@ class Analyze : public pgn::Visitor {
 
     void header(std::string_view key, std::string_view value) override {
         if (key == "FEN") {
+            std::cout << value << std::endl;
             std::regex p("^(.+) 0 1$");
             std::smatch match;
             std::string value_str(value);
@@ -156,6 +157,16 @@ class Analyze : public pgn::Visitor {
     void move(std::string_view move, std::string_view comment) override {
         if (skip) {
             return;
+        }
+
+        if (move == "O-O" || move == "O-O-O") {
+          Move m = uci::parseSan(board, move);
+          board.makeMove<true>(m);
+          if (board.inCheck()) {
+            std::cerr << "While parsing " << file << " encountered: " << move << std::endl;
+            std::exit(1);
+          }
+          board.unmakeMove(m);
         }
 
         if (board.fullMoveNumber() > 200) {
