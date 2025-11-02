@@ -39,11 +39,11 @@ def poly3(x, c_3, c_2, c_1, c_0):
 
 class WdlData:
     """stores wdl raw data counts and wdl densities in six 2D numpy arrays, with
-    'coordinates' (mom, eval), for mom = move/material and internal eval"""
+    'coordinates' (mom, eval), for mom = pawnindex/material and internal eval"""
 
     def __init__(self, args):
         self.momType = args.momType
-        self.moveMin, self.moveMax = args.moveMin, args.moveMax
+        self.piMin, self.piMax = args.piMin, args.piMax
         self.materialMin, self.materialMax = args.materialMin, args.materialMax
         self.winMin = args.winMin
         self.NormalizeData = args.NormalizeData
@@ -54,9 +54,9 @@ class WdlData:
             if not "momType" in self.NormalizeData:
                 self.NormalizeData["momType"] = "material"
             assert self.NormalizeData["momType"] in [
-                "move",
+                "pawnindex",
                 "material",
-            ], "Error: momType must be move or material."
+            ], "Error: momType must be pawnindex or material."
         else:
             self.normalize_to_pawn_value = args.NormalizeToPawnValue
 
@@ -70,9 +70,9 @@ class WdlData:
         )
 
         # numpy arrays have nonnegative indices, so save the two offsets for later
-        if self.momType == "move":
-            dim_mom = self.moveMax - self.moveMin + 1
-            self.offset_mom = self.moveMin
+        if self.momType == "pawnindex":
+            dim_mom = self.piMax - self.piMin + 1
+            self.offset_mom = self.piMin
         else:
             dim_mom = self.materialMax - self.materialMin + 1
             self.offset_mom = self.materialMin
@@ -97,7 +97,7 @@ class WdlData:
             self.losses[mom_idx, eval_idx] += value
 
     def load_json_data(self, filenames):
-        """load the WDL data from json: the keys describe the position (result, move, material, eval),
+        """load the WDL data from json: the keys describe the position (result, pawnindex, material, eval),
         and the values are the observed count of these positions"""
         for filename in filenames:
             print(f"Reading eval stats from {filename}.")
@@ -105,9 +105,9 @@ class WdlData:
                 data = json.load(infile)
 
                 for key, value in data.items() if data else []:
-                    result, move, material, eval = literal_eval(key)
+                    result, pawnindex, material, eval = literal_eval(key)
 
-                    if move < self.moveMin or move > self.moveMax:
+                    if pawnindex < self.piMin or pawnindex > self.piMax:
                         continue
                     if material < self.materialMin or material > self.materialMax:
                         continue
@@ -119,8 +119,8 @@ class WdlData:
                     else:
                         # undo dynamic rescaling, that was dependent on mom
                         mom = (
-                            move
-                            if self.NormalizeData["momType"] == "move"
+                            pawnindex
+                            if self.NormalizeData["momType"] == "pawnindex"
                             else material
                         )
                         mom_clamped = min(
@@ -134,7 +134,7 @@ class WdlData:
                     eval_internal = round(eval * a_internal / 100)
 
                     if abs(eval_internal) <= self.eval_max:
-                        mom = move if self.momType == "move" else material
+                        mom = pawnindex if self.momType == "pawnindex" else material
                         self.add_to_wdl_counters(result, mom, eval_internal, value)
 
         W, D, L = self.wins.sum(), self.draws.sum(), self.losses.sum()
@@ -370,7 +370,7 @@ class WdlModel:
 
     def wdl_rates(self, eval: np.ndarray, mom: np.ndarray):
         """our wdl model is based on win/loss rate with a and b polynomials in mom,
-        where mom = move or material counter"""
+        where mom = pawnindex or material counter"""
         a = poly3(mom / self.momTarget, *self.coeffs_a)
         b = poly3(mom / self.momTarget, *self.coeffs_b)
         w = win_rate(eval, a, b)
@@ -597,7 +597,7 @@ if __name__ == "__main__":
         description="Fit Stockfish's WDL model to fishtest game statistics. "
         + "Given an (internal) evaluation x, the model sets W(x) = 1 / ( 1 + exp(-(x-a)/b)), "
         + "L(x) = W(-x) and D(x) = 1 - W(x) - L(x), where a = p_a(mom) and b = p_b(mom) are "
-        + "polynomials in mom (move number or material count). "
+        + "polynomials in mom (pawnindex or material count). "
         + "The engine can use the polynomial p_a also to compute a 'centipawn' evaluation so "
         + "that 100cp mean W=50%: either x/p_a(mom) (dynamic rescaling) or x/p_a(momTarget) "
         + "(static rescaling). "
@@ -620,19 +620,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--NormalizeData",
         type=str,
-        help='Dynamic rescaling parameters. E.g. {"momType": "move", "momMin": 11, "momMax": 120, "momTarget": 32, "as": [0.38036525, -2.82015070, 23.17882135, 307.36768407]}.',
+        help='Dynamic rescaling parameters. E.g. {"momType": "pawnindex", "momMin": 10, "momMax": 90, "momTarget": 64, "as": [0.38036525, -2.82015070, 23.17882135, 307.36768407]}.',
     )
     parser.add_argument(
-        "--moveMin",
+        "--piMin",
         type=int,
-        default=1,
-        help="Lower move number limit for filter applied to json data.",
+        default=0,
+        help="Lower pawn index limit for filter applied to json data.",
     )
     parser.add_argument(
-        "--moveMax",
+        "--piMax",
         type=int,
-        default=120,
-        help="Upper move number limit for filter applied to json data.",
+        default=96,
+        help="Upper pawn index limit for filter applied to json data.",
     )
     parser.add_argument(
         "--materialMin",
@@ -654,7 +654,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--momType",
-        choices=["move", "material"],
+        choices=["pawnindex", "material"],
         default="material",
         help="Select y-axis data used for plotting and fitting.",
     )
@@ -679,12 +679,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--momPlotMin",
         type=int,
-        help="Overrides --moveMin/--materialMin for plotting.",
+        help="Overrides --piMin/--materialMin for plotting.",
     )
     parser.add_argument(
         "--momPlotMax",
         type=int,
-        help="Overrides --moveMax/--materialMax for plotting.",
+        help="Overrides --piMax/--materialMax for plotting.",
     )
     parser.add_argument(
         "--momPlotTarget",
@@ -717,9 +717,9 @@ if __name__ == "__main__":
         ), "Error: Can only specify one of --NormalizeToPawnValue and --NormalizeData."
 
     if args.momPlotMin is None:
-        args.momPlotMin = args.moveMin if args.momType == "move" else args.materialMin
+        args.momPlotMin = args.piMin if args.momType == "pawnindex" else args.materialMin
     if args.momPlotMax is None:
-        args.momPlotMax = args.moveMax if args.momType == "move" else args.materialMax
+        args.momPlotMax = args.piMax if args.momType == "pawnindex" else args.materialMax
     if args.momPlotTarget is None:
         args.momPlotTarget = args.momTarget
 

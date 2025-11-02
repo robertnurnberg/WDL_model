@@ -27,7 +27,7 @@ using json   = nlohmann::json;
 
 using namespace chess;
 
-// unordered map to count (result, move, material, eval) tuples in pgns
+// unordered map to count (result, pawnindex, material, eval) tuples in pgns
 using map_t =
     phmap::parallel_flat_hash_map<Key, int, std::hash<Key>, std::equal_to<Key>,
                                   std::allocator<std::pair<const Key, int>>, 8, std::mutex>;
@@ -44,6 +44,25 @@ std::atomic<std::size_t> total_chunks = 0;
 std::atomic<std::size_t> total_games  = 0;
 
 namespace analysis {
+
+size_t pawnIndex(const Board &board) {
+  // sum of pawn's distances to promotion rank, ranges from 0 to 96
+  Bitboard pawns;
+  size_t pawnProgress = 0;
+  pawns = board.pieces(PieceType::PAWN, Color::WHITE);
+  while (pawns) {
+    Square ps(pawns.pop());
+    int r = int(ps.rank());
+    pawnProgress += 7 - r;
+  };
+  pawns = board.pieces(PieceType::PAWN, Color::BLACK);
+  while (pawns) {
+    Square ps(pawns.pop());
+    int r = int(ps.rank());
+    pawnProgress += r;
+  };
+  return pawnProgress;
+}
 
 /// @brief Magic value for fishtest pgns, ~1.2 million keys
 static constexpr int map_size = 1200000;
@@ -190,9 +209,9 @@ class Analyze : public pgn::Visitor {
             const auto queens  = board.pieces(PieceType::QUEEN).count();
             const auto pawns   = board.pieces(PieceType::PAWN).count();
 
-            key.result   = board.sideToMove() == Color::WHITE ? resultkey.white : resultkey.black;
-            key.move     = board.fullMoveNumber();
-            key.material = 9 * queens + 5 * rooks + 3 * bishops + 3 * knights + pawns;
+            key.result    = board.sideToMove() == Color::WHITE ? resultkey.white : resultkey.black;
+            key.pawnindex = pawnIndex(board);
+            key.material  = 9 * queens + 5 * rooks + 3 * bishops + 3 * knights + pawns;
 
             // insert or update the position map
             pos_map.lazy_emplace_l(

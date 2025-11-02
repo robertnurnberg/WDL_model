@@ -19,21 +19,21 @@ struct ResultKey {
 };
 
 struct Key {
-    Result result;             // game result from PoV of side to move
-    int move, material, eval;  // move number, material count, engine's eval
+    Result result;                  // game result from PoV of side to move
+    int pawnindex, material, eval;  // pawn index, material count, engine's eval
     bool operator==(const Key &k) const {
-        return result == k.result && move == k.move && material == k.material && eval == k.eval;
+        return result == k.result && pawnindex == k.pawnindex && material == k.material && eval == k.eval;
     }
     operator std::size_t() const {
         // golden ratio hashing, thus 0x9e3779b9
         std::uint32_t hash = static_cast<int>(result);
-        hash ^= move + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= pawnindex + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         hash ^= material + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         hash ^= eval + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         return hash;
     }
     operator std::string() const {
-        return "('" + std::string(1, static_cast<char>(result)) + "', " + std::to_string(move) +
+        return "('" + std::string(1, static_cast<char>(result)) + "', " + std::to_string(pawnindex) +
                ", " + std::to_string(material) + ", " + std::to_string(eval) + ")";
     }
 };

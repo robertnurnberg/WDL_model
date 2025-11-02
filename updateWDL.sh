@@ -7,11 +7,11 @@ set -e
 # by default we start from the most recent WDL model change and go to master
 default_firstrev=4a869f41c6113f1ccdd0f11551858fdc849a245a
 default_lastrev=HEAD
-default_materialMin=17
+default_piMin=10
 default_EloDiffMax=5
 firstrev=$default_firstrev
 lastrev=$default_lastrev
-materialMin=$default_materialMin
+piMin=$default_piMin
 EloDiffMax=$default_EloDiffMax
 
 while [[ $# -gt 0 ]]; do
@@ -24,8 +24,8 @@ while [[ $# -gt 0 ]]; do
         lastrev="$2"
         shift 2
         ;;
-    --materialMin)
-        materialMin="$2"
+    --piMin)
+        piMin="$2"
         shift 2
         ;;
     --EloDiffMax)
@@ -35,10 +35,10 @@ while [[ $# -gt 0 ]]; do
     --help)
         echo "Usage: $0 [OPTIONS]"
         echo "Options:"
-        echo "  --firstrev FIRSTREV        First SF commit to collect games from (default: $default_firstrev)"
-        echo "  --lastrev LASTREV          Last SF commit to collect games from (default: $default_lastrev)"
-        echo "  --materialMin MATERIALMIN  Parameter passed to scoreWDL.py (default: $default_materialMin)"
-        echo "  --EloDiffMax ELODIFFMAX    Parameter passed to scoreWDLstat (default: $default_EloDiffMax)"
+        echo "  --firstrev FIRSTREV      First SF commit to collect games from (default: $default_firstrev)"
+        echo "  --lastrev LASTREV        Last SF commit to collect games from (default: $default_lastrev)"
+        echo "  --piMin PIMIN            Parameter passed to scoreWDL.py (default: $default_piMin)"
+        echo "  --EloDiffMax ELODIFFMAX  Parameter passed to scoreWDLstat (default: $default_EloDiffMax)"
         exit 0
         ;;
     *)
@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "Running: $0 --firstrev $firstrev --lasttrev $lastrev --materialMin $materialMin --EloDiffMax $EloDiffMax"
+echo "Running: $0 --firstrev $firstrev --lasttrev $lastrev --piMin $piMin --EloDiffMax $EloDiffMax"
 
 echo "started at: " $(date)
 
@@ -153,7 +153,7 @@ if [[ $gamescount -eq 0 ]]; then
 fi
 
 # fit the new WDL model, keeping anchor at material 58
-python scoreWDL.py updateWDL.json --plot save --pngName updateWDL.png --pngNameDistro updateWDLdistro.png --momType material --momTarget 58 --materialMin $materialMin --moveMin 1 --modelFitting optimizeProbability $oldnormdata >&scoreWDL.log
+python scoreWDL.py updateWDL.json --plot save --pngName updateWDL.png --pngNameDistro updateWDLdistro.png --momType pawnindex --momTarget 64 --piMin $piMin --modelFitting optimizeProbability $oldnormdata >&scoreWDL.log
 
 # extract the total number of positions, and the new NormalizeToPawnValue
 poscount=$(awk -F '[() ,]' '/Retained \(W,D,L\)/ {sum = 0; for (i = 9; i <= NF; i++) sum += $i; printf "%.0f\n", sum; exit}' scoreWDL.log)
