@@ -8,10 +8,12 @@ set -e
 default_firstrev=71f53b92c7095f1f145b85d63b8ad49f9ef553f9
 default_lastrev=HEAD
 default_piMin=10
+default_piMax=80
 default_EloDiffMax=5
 firstrev=$default_firstrev
 lastrev=$default_lastrev
 piMin=$default_piMin
+piMax=$default_piMax
 EloDiffMax=$default_EloDiffMax
 
 while [[ $# -gt 0 ]]; do
@@ -28,6 +30,10 @@ while [[ $# -gt 0 ]]; do
         piMin="$2"
         shift 2
         ;;
+    --piMax)
+        piMax="$2"
+        shift 2
+        ;;
     --EloDiffMax)
         EloDiffMax="$2"
         shift 2
@@ -38,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         echo "  --firstrev FIRSTREV      First SF commit to collect games from (default: $default_firstrev)"
         echo "  --lastrev LASTREV        Last SF commit to collect games from (default: $default_lastrev)"
         echo "  --piMin PIMIN            Parameter passed to scoreWDL.py (default: $default_piMin)"
+        echo "  --piMax PIMAX            Parameter passed to scoreWDL.py (default: $default_piMax)"
         echo "  --EloDiffMax ELODIFFMAX  Parameter passed to scoreWDLstat (default: $default_EloDiffMax)"
         exit 0
         ;;
@@ -47,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "Running: $0 --firstrev $firstrev --lasttrev $lastrev --piMin $piMin --EloDiffMax $EloDiffMax"
+echo "Running: $0 --firstrev $firstrev --lasttrev $lastrev --piMin $piMin --piMax $piMax --EloDiffMax $EloDiffMax"
 
 echo "started at: " $(date)
 
@@ -153,7 +160,7 @@ if [[ $gamescount -eq 0 ]]; then
 fi
 
 # fit the new WDL model, keeping anchor at material 58
-python scoreWDL.py updateWDL.json --plot save --pngName updateWDL.png --pngNameDistro updateWDLdistro.png --momType pawnindex --momTarget 64 --piMin $piMin --modelFitting optimizeProbability $oldnormdata >&scoreWDL.log
+python scoreWDL.py updateWDL.json --plot save --pngName updateWDL.png --pngNameDistro updateWDLdistro.png --momType pawnindex --momTarget 64 --piMin $piMin --piMax $piMax --modelFitting optimizeProbability $oldnormdata >&scoreWDL.log
 
 # extract the total number of positions, and the new NormalizeToPawnValue
 poscount=$(awk -F '[() ,]' '/Retained \(W,D,L\)/ {sum = 0; for (i = 9; i <= NF; i++) sum += $i; printf "%.0f\n", sum; exit}' scoreWDL.log)
